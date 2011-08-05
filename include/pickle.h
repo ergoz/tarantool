@@ -28,6 +28,7 @@
 #define TARANTOOL_PICKLE_H
 
 #include <util.h>
+#include <tbuf.h>
 
 u8 *save_varint32(u8 *target, u32 value);
 void write_varint32(struct tbuf *b, u32 value);
@@ -73,7 +74,7 @@ inline static u32 load_varint32(void **data)
 			(b[2] & 0x7f) << 14 | (b[3] & 0x7f) << 7 | (b[4] & 0x7f);
 	}
 
-	assert(false);
+	assert(0);
 	return 0;
 }
 

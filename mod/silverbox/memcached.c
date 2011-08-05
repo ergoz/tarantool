@@ -212,10 +212,10 @@ flush_all(void *data)
 {
 	uintptr_t delay = (uintptr_t)data;
 	fiber_sleep(delay - ev_now());
-	khash_t(lstr_ptr_map) *map = memcached_index->idx.str_hash;
-	for (khiter_t i = kh_begin(map); i != kh_end(map); i++) {
-		if (kh_exist(map, i)) {
-			struct box_tuple *tuple = kh_value(map, i);
+	struct mh_lstrptr_t *map = memcached_index->idx.str_hash;
+	for (u32 i = 0; i != mh_end(map); i++) {
+		if (mh_exist(map, i)) {
+			struct box_tuple *tuple = mh_value(map, i);
 			meta(tuple)->exptime = 1;
 		}
 	}

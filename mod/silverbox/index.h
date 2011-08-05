@@ -27,7 +27,7 @@
 #ifndef TARANTOOL_SILVERBOX_INDEX_H
 #define TARANTOOL_SILVERBOX_INDEX_H
 
-#include <mod/silverbox/assoc.h>
+#include <assoc.h>
 
 /**
  * A field reference used for TREE indexes. Either stores a copy
@@ -76,10 +76,10 @@ struct index {
 	void (*iterator_init) (struct index *, struct tree_index_member * pattern);
 	struct box_tuple *(*iterator_next) (struct index *, struct tree_index_member * pattern);
 	union {
-		khash_t(lstr_ptr_map) * str_hash;
-		khash_t(int_ptr_map) * int_hash;
-		khash_t(int64_ptr_map) * int64_hash;
-		khash_t(int_ptr_map) * hash;
+		struct mh_lstrptr_t * str_hash;
+		struct mh_i32ptr_t * int_hash;
+		struct mh_i64ptr_t * int64_hash;
+		struct mh_i32ptr_t * hash;
 		sptree_str_t *tree;
 	} idx;
 	void *iterator;
@@ -101,6 +101,7 @@ struct index {
 	struct tree_index_member *search_pattern;
 
 	enum { HASH, TREE } type;
+	enum { HASH_NUM32, HASH_NUM64, HASH_LSTR } hash_type;
 };
 
 #define foreach_index(n, index_var)					\

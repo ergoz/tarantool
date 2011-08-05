@@ -1000,29 +1000,29 @@ static void
 namespace_expire(void *data)
 {
 	struct namespace *namespace = data;
-	khiter_t i = 0;
-	khash_t(int_ptr_map) *map = namespace->index[0].idx.hash;
+	struct mh_lstrptr_t *map = namespace->index[0].idx.str_hash;
+	u32 i = 0;
 
 	say_info("expire fiber started");
 	for (;;) {
 		say_debug("expire loop");
-		if (i > kh_end(map))
-			i = kh_begin(map);
+		if (i > mh_end(map))
+			i = 0;
 
 		struct tbuf *keys_to_delete = tbuf_alloc(fiber->pool);
 		int expired_tuples = 0;
 
 		{TIME_THIS(expire_loop);
 		for (int j = 0; j < namespace->expire_per_loop; j++, i++) {
-			if (i == kh_end(map)) {
-				i = kh_begin(map);
+			if (i == mh_end(map)) {
+				i = 0;
 				break;
 			}
 
-			if (!kh_exist(map, i))
+			if (!mh_exist(map, i))
 				continue;
 
-			struct box_tuple *tuple = kh_value(map, i);
+			struct box_tuple *tuple = mh_value(map, i);
 
 			if (tuple->flags & GHOST || !namespace->tuple_expired(namespace, tuple))
 				continue;
@@ -1366,7 +1366,7 @@ stat_box(struct tbuf *out, unsigned n, unsigned i)
 
 	if (namespace[n].index[i].type == HASH) {
 		tbuf_printf(out, "hash index statistics:" CRLF);
-		kh_stat(out, namespace[n].index[0].idx.int_hash);
+		mh_stat(out, namespace[n].index[0].idx.int_hash);
 	} else {
 		; /* TODO: stat for other index types */
 	}
@@ -1612,14 +1612,22 @@ mod_snapshot(struct log_io_iter *i)
 	struct tbuf *row;
 	struct box_snap_row header;
 	struct box_tuple *tuple;
-	khiter_t k;
 
 	for (uint32_t n = 0; n < namespace_count; ++n) {
 		if (!namespace[n].enabled)
 			continue;
 
-		assoc_foreach(namespace[n].index[0].idx.int_hash, k) {
-			tuple = kh_value(namespace[n].index[0].idx.int_hash, k);
+		for (u32 k = 0; k < mh_end(namespace[n].index[0].idx.hash); k++) {
+			if (!mh_exist(namespace[n].index[0].idx.hash, k))
+				continue;
+			if (namespace[n].index[0].hash_type == HASH_NUM32)
+				tuple = mh_value(namespace[n].index[0].idx.int_hash, k);
+			else if (namespace[n].index[0].hash_type == HASH_NUM64)
+				tuple = mh_value(namespace[n].index[0].idx.int64_hash, k);
+			else if (namespace[n].index[0].hash_type == HASH_LSTR)
+				tuple = mh_value(namespace[n].index[0].idx.str_hash, k);
+			else
+				panic("bad hash type");
 
 			if (tuple->flags & GHOST)	// do not save fictive rows
 				continue;
