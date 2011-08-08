@@ -254,15 +254,16 @@ static inline uint32_t
 _mh(put)(struct _mh(t) *h, mh_key_t key, mh_val_t val, int *ret)
 {
 	if (mh_unlikely(h->n_occupied >= h->upper_bound || h->resizing > 0)) {
-		if (h->resizing > 0) {
+		if (h->resizing > 0)
 			_mh(resize)(h);
+		else
+			_mh(start_resize)(h, 0);
+		if (h->resizing) {
 			struct _mh(t) *s = h->shadow;
 			uint32_t y = place(s, slot, key);
 			s->p[y].key = key;
 			s->p[y].val = val;
 			mh_setexist(s, y);
-		} else {
-			_mh(start_resize)(h, 0);
 		}
 	}
 	uint32_t dirty = -1;
