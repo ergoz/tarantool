@@ -1666,3 +1666,22 @@ mod_exec(char *str __unused__, int len __unused__, struct tbuf *out)
 {
 	tbuf_printf(out, "unimplemented" CRLF);
 }
+
+void
+rehash(void *ev, int events)
+{
+	(void)ev;
+	(void)events;
+
+	for (uint32_t n = 0; n < namespace_count; ++n) {
+		if (!namespace[n].enabled)
+			continue;
+
+		if (namespace[n].index[0].hash_type == HASH_NUM32)
+			mh_i32ptr_start_resize(namespace[n].index[0].idx.int_hash, 0);
+		else if (namespace[n].index[0].hash_type == HASH_NUM64)
+			mh_i64ptr_start_resize(namespace[n].index[0].idx.int64_hash, 0);
+		else if (namespace[n].index[0].hash_type == HASH_LSTR)
+			mh_lstrptr_start_resize(namespace[n].index[0].idx.str_hash, 0);
+	}
+}

@@ -236,6 +236,8 @@ sig_int(int signal)
 		_exit(EXIT_SUCCESS);
 }
 
+void rehash (void *ev, int events);
+
 /**
  * Adjust the process signal mask and add handlers for signals.
  */
@@ -550,6 +552,10 @@ main(int argc, char **argv)
 	ev_signal *ev_sig;
 	ev_sig = palloc(eter_pool, sizeof(ev_signal));
 	ev_signal_init(ev_sig, (void *)snapshot, SIGUSR1);
+	ev_signal_start(ev_sig);
+
+	ev_sig = palloc(eter_pool, sizeof(ev_signal));
+	ev_signal_init(ev_sig, (void *)rehash, SIGUSR2);
 	ev_signal_start(ev_sig);
 
 	initialize(cfg.slab_alloc_arena, cfg.slab_alloc_minimal, cfg.slab_alloc_factor);

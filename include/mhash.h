@@ -86,7 +86,7 @@ struct _mh(t) {
 	uint32_t prime;
 
 	u32 resize_cnt;
-	uint32_t resizing;
+	uint32_t resizing, batch;
 	struct _mh(t) *shadow;
 };
 
@@ -191,36 +191,12 @@ _mh(dump)(struct _mh(t) *h)
 }
 #endif
 
-static inline void
-_mh(start_resize)(struct _mh(t) *h)
-{
-	say_info("START resize of %p n_occupied:%i size:%i n_buckets:%i",
-		 h, (int)h->n_occupied, (int)h->size, (int)h->n_buckets);
-
-	struct _mh(t) *s = h->shadow;
-	if (h->n_buckets < h->size * 2) {
-		for (int k = h->prime; k < __ac_HASH_PRIME_SIZE; k++)
-			if (__ac_prime_list[k] > h->size) {
-				h->prime = k + 1;
-				break;
-			}
-	}
-	memcpy(s, h, sizeof(*h));
-	s->n_buckets = __ac_prime_list[h->prime];
-	s->upper_bound = s->n_buckets * 0.7;
-	s->n_occupied = 0;
-	s->p = malloc(s->n_buckets * sizeof(struct _mh(pair)));
-	s->b = calloc(s->n_buckets, 1);
-}
-
 static inline
 void _mh(resize)(struct _mh(t) *h)
 {
 	TIME_THIS(mh_resize);
 	struct _mh(t) *s = h->shadow;
-	uint32_t batch = h->n_buckets / 16 * 1024;
-	if (batch < 4096)
-		batch = 4096;
+	uint32_t batch = h->batch;
 	for (uint32_t o = h->resizing; o < h->n_buckets; o++) {
 		if (batch-- == 0) {
 			h->resizing = o;
@@ -244,19 +220,49 @@ void _mh(resize)(struct _mh(t) *h)
 
 }
 
+static inline void
+_mh(start_resize)(struct _mh(t) *h, uint32_t buckets)
+{
+	if (h->resizing)
+		return;
+	say_info("START resize of %p n_occupied:%i size:%i n_buckets:%i",
+		 h, (int)h->n_occupied, (int)h->size, (int)h->n_buckets);
+
+	struct _mh(t) *s = h->shadow;
+	if (buckets < h->n_buckets)
+		buckets = h->n_buckets;
+	if (buckets < h->size * 2) {
+		for (int k = h->prime; k < __ac_HASH_PRIME_SIZE; k++)
+			if (__ac_prime_list[k] > h->size) {
+				h->prime = k + 1;
+				break;
+			}
+	}
+	h->batch = h->n_buckets / (128 * 1024);
+	if (h->batch < 1024)
+		h->batch = 1024;
+	memcpy(s, h, sizeof(*h));
+	s->n_buckets = __ac_prime_list[h->prime];
+	s->upper_bound = s->n_buckets * 0.7;
+	s->n_occupied = 0;
+	s->p = malloc(s->n_buckets * sizeof(struct _mh(pair)));
+	s->b = calloc(s->n_buckets, 1);
+	_mh(resize)(h);
+}
+
 static inline uint32_t
 _mh(put)(struct _mh(t) *h, mh_key_t key, mh_val_t val, int *ret)
 {
-	if (mh_unlikely(h->n_occupied >= h->upper_bound)) {
-		if (h->resizing == 0)
-			_mh(start_resize)(h);
-		_mh(resize)(h);
-		if (h->resizing) {
+	if (mh_unlikely(h->n_occupied >= h->upper_bound || h->resizing > 0)) {
+		if (h->resizing > 0) {
+			_mh(resize)(h);
 			struct _mh(t) *s = h->shadow;
 			uint32_t y = place(s, slot, key);
 			s->p[y].key = key;
 			s->p[y].val = val;
 			mh_setexist(s, y);
+		} else {
+			_mh(start_resize)(h, 0);
 		}
 	}
 	uint32_t dirty = -1;
@@ -300,16 +306,18 @@ _mh(del)(struct _mh(t) *h, uint32_t x)
 }
 
 #ifndef mh_stat
-#define mh_stat(buf, h) (                                           \
+#define mh_stat(buf, h) ({					    \
                 tbuf_printf(buf, "  n_buckets: %"PRIu32 CRLF        \
                             "  n_occupied: %"PRIu32 CRLF            \
                             "  size: %"PRIu32 CRLF                  \
-                            "  resize_cnt: %"PRIu32 CRLF,           \
+                            "  resize_cnt: %"PRIu32 CRLF	    \
+			    "  resizing: %"PRIu32 CRLF,		    \
                             h->n_buckets,                           \
                             h->n_occupied,                          \
                             h->size,                                \
-                            h->resize_cnt)                          \
-                )
+                            h->resize_cnt,			    \
+			    h->resizing);			    \
+			})
 #endif
 
 #undef mh_dirty
