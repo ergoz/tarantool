@@ -238,9 +238,9 @@ _mh(start_resize)(struct _mh(t) *h, uint32_t buckets)
 				break;
 			}
 	}
-	h->batch = h->n_buckets / (128 * 1024);
-	if (h->batch < 1024)
-		h->batch = 1024;
+	h->batch = h->n_buckets / (256 * 1024);
+	if (h->batch < 256) /* minimum batch is 3 */
+		h->batch = 256;
 	memcpy(s, h, sizeof(*h));
 	s->n_buckets = __ac_prime_list[h->prime];
 	s->upper_bound = s->n_buckets * 0.7;
