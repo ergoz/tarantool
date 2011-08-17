@@ -104,7 +104,7 @@ struct _mh(t) {
 
 #define slot(h, i, key_v)						\
 ({									\
-	mh_free(h, i) || (mh_eq(h->p[i].key, key_v) && !mh_dirty(h, i)); \
+	mh_free(h, i) || (!mh_dirty(h, i) && mh_eq(h->p[i].key, key_v)); \
 })
 
 #define slot_and_dirty(h, i, key_v)					\
