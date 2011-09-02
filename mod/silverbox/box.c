@@ -1047,15 +1047,12 @@ namespace_expire(void *data)
 			void *field15 = tuple_field(tuple, 15);
 			struct tbuf *ins_req = tbuf_alloc(fiber->pool);
 			if (ins_namespace > -1 && field1 != NULL && field15 != NULL) {
-				say_crit("CEMETERY OK: %i %p %p", ins_namespace, field1, field15);
 				tbuf_append(ins_req, &ins_namespace, sizeof(u32));
 				tbuf_append(ins_req, &flags, sizeof(u32));
 				tbuf_append(ins_req, &ins_cardinality, sizeof(u32));
 				tbuf_append_field(ins_req, field1);
 				tbuf_append_field(ins_req, field15);
 				box_dispach(ins_txn, RW, INSERT, ins_req);
-			} else {
-				say_crit("CEMETERY FAIL: %i %p %p", ins_namespace, field1, field15);
 			}
 		}
 		stat_collect(stat_base, EXPIRE, expired_tuples);
