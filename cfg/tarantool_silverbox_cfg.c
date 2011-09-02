@@ -78,6 +78,7 @@ acceptDefault_name__namespace(tarantool_cfg_namespace *c) {
 	c->expire_field = -1;
 	c->expire_per_loop = 1024;
 	c->expire_full_sweep = 3600;
+	c->expire_cemetery = -1;
 	c->index = NULL;
 	return 0;
 }
@@ -233,6 +234,10 @@ static NameAtom _name__namespace__expire_per_loop[] = {
 static NameAtom _name__namespace__expire_full_sweep[] = {
 	{ "namespace", -1, _name__namespace__expire_full_sweep + 1 },
 	{ "expire_full_sweep", -1, NULL }
+};
+static NameAtom _name__namespace__expire_cemetery[] = {
+	{ "namespace", -1, _name__namespace__expire_cemetery + 1 },
+	{ "expire_cemetery", -1, NULL }
 };
 static NameAtom _name__namespace__index[] = {
 	{ "namespace", -1, _name__namespace__index + 1 },
@@ -864,6 +869,24 @@ acceptValue(tarantool_cfg* c, OptDef* opt, int check_rdonly) {
 			return CNF_RDONLY;
 		c->namespace[opt->name->index]->expire_full_sweep = i32;
 	}
+	else if ( cmpNameAtoms( opt->name, _name__namespace__expire_cemetery) ) {
+		if (opt->paramType != numberType )
+			return CNF_WRONGTYPE;
+		ARRAYALLOC(c->namespace, opt->name->index + 1, _name__namespace, check_rdonly, CNF_FLAG_STRUCT_NEW | CNF_FLAG_STRUCT_NOTSET);
+		if (c->namespace[opt->name->index]->__confetti_flags & CNF_FLAG_STRUCT_NEW)
+			check_rdonly = 0;
+		c->namespace[opt->name->index]->__confetti_flags &= ~CNF_FLAG_STRUCT_NOTSET;
+		c->namespace[opt->name->index]->__confetti_flags &= ~CNF_FLAG_STRUCT_NOTSET;
+		errno = 0;
+		long int i32 = strtol(opt->paramValue.numberval, NULL, 10);
+		if (i32 == 0 && errno == EINVAL)
+			return CNF_WRONGINT;
+		if ( (i32 == LONG_MIN || i32 == LONG_MAX) && errno == ERANGE)
+			return CNF_WRONGRANGE;
+		if (check_rdonly && c->namespace[opt->name->index]->expire_cemetery != i32)
+			return CNF_RDONLY;
+		c->namespace[opt->name->index]->expire_cemetery = i32;
+	}
 	else if ( cmpNameAtoms( opt->name, _name__namespace__index) ) {
 		if (opt->paramType != arrayType )
 			return CNF_WRONGTYPE;
@@ -1124,6 +1147,7 @@ typedef enum IteratorState {
 	S_name__namespace__expire_field,
 	S_name__namespace__expire_per_loop,
 	S_name__namespace__expire_full_sweep,
+	S_name__namespace__expire_cemetery,
 	S_name__namespace__index,
 	S_name__namespace__index__type,
 	S_name__namespace__index__unique,
@@ -1553,6 +1577,7 @@ again:
 		case S_name__namespace__expire_field:
 		case S_name__namespace__expire_per_loop:
 		case S_name__namespace__expire_full_sweep:
+		case S_name__namespace__expire_cemetery:
 		case S_name__namespace__index:
 		case S_name__namespace__index__type:
 		case S_name__namespace__index__unique:
@@ -1626,6 +1651,17 @@ again:
 						}
 						sprintf(*v, "%"PRId32, c->namespace[i->idx_name__namespace]->expire_full_sweep);
 						snprintf(buf, PRINTBUFLEN-1, "namespace[%d].expire_full_sweep", i->idx_name__namespace);
+						i->state = S_name__namespace__expire_cemetery;
+						return buf;
+					case S_name__namespace__expire_cemetery:
+						*v = malloc(32);
+						if (*v == NULL) {
+							free(i);
+							out_warning(CNF_NOMEMORY, "No memory to output value");
+							return NULL;
+						}
+						sprintf(*v, "%"PRId32, c->namespace[i->idx_name__namespace]->expire_cemetery);
+						snprintf(buf, PRINTBUFLEN-1, "namespace[%d].expire_cemetery", i->idx_name__namespace);
 						i->state = S_name__namespace__index;
 						return buf;
 					case S_name__namespace__index:
@@ -1928,6 +1964,7 @@ dup_tarantool_cfg(tarantool_cfg* dst, tarantool_cfg* src) {
 			dst->namespace[i->idx_name__namespace]->expire_field = src->namespace[i->idx_name__namespace]->expire_field;
 			dst->namespace[i->idx_name__namespace]->expire_per_loop = src->namespace[i->idx_name__namespace]->expire_per_loop;
 			dst->namespace[i->idx_name__namespace]->expire_full_sweep = src->namespace[i->idx_name__namespace]->expire_full_sweep;
+			dst->namespace[i->idx_name__namespace]->expire_cemetery = src->namespace[i->idx_name__namespace]->expire_cemetery;
 
 			dst->namespace[i->idx_name__namespace]->index = NULL;
 			if (src->namespace[i->idx_name__namespace]->index != NULL) {
@@ -2278,6 +2315,11 @@ cmp_tarantool_cfg(tarantool_cfg* c1, tarantool_cfg* c2, int only_check_rdonly) {
 		}
 		if (c1->namespace[i1->idx_name__namespace]->expire_full_sweep != c2->namespace[i2->idx_name__namespace]->expire_full_sweep) {
 			snprintf(diff, PRINTBUFLEN - 1, "%s", "c->namespace[]->expire_full_sweep");
+
+			return diff;
+		}
+		if (c1->namespace[i1->idx_name__namespace]->expire_cemetery != c2->namespace[i2->idx_name__namespace]->expire_cemetery) {
+			snprintf(diff, PRINTBUFLEN - 1, "%s", "c->namespace[]->expire_cemetery");
 
 			return diff;
 		}

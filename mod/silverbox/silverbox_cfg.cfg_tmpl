@@ -73,6 +73,7 @@ namespace = [
     expire_field = -1, ro
     expire_per_loop = 1024, ro
     expire_full_sweep = 3600, ro
+    expire_cemetery = -1, ro
 
     index = [
       {

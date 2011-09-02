@@ -5,25 +5,34 @@ select * from t0 where k0 = 2
 No match
 select * from t0 where k0 = 3
 No match
-insert into t0 values (1, 1, 'a')
+insert into t0 values (1, 'a', 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
 Insert OK, 1 row affected
-insert into t0 values (2, 1, 'b')
+insert into t0 values (2, 'b', 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
 Insert OK, 1 row affected
-insert into t0 values (3, 1, 'c')
+insert into t0 values (3, 'c', 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
 Insert OK, 1 row affected
 select * from t0 where k0 = 1
 Found 1 tuple:
-[1, 1, 'a']
+[1, 'a', 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 select * from t0 where k0 = 2
 Found 1 tuple:
-[2, 1, 'b']
+[2, 'b', 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 select * from t0 where k0 = 3
 Found 1 tuple:
-[3, 1, 'c']
+[3, 'c', 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 select * from t0 where k0 = 1
 No match
 select * from t0 where k0 = 2
 No match
 select * from t0 where k0 = 3
 No match
+select * from t1 where k0 = 'a'
+Found 1 tuple:
+['a', 14]
+select * from t1 where k0 = 'b'
+Found 1 tuple:
+['b', 14]
+select * from t1 where k0 = 'c'
+Found 1 tuple:
+['c', 14]
 Stopping the server...

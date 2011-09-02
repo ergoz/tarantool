@@ -1012,7 +1012,6 @@ namespace_expire(void *data)
 		struct tbuf *keys_to_delete = tbuf_alloc(fiber->pool);
 		int expired_tuples = 0;
 
-		{TIME_THIS(expire_loop);
 		for (int j = 0; j < namespace->expire_per_loop; j++, i++) {
 			if (i == mh_end(map)) {
 				i = 0;
@@ -1029,22 +1028,35 @@ namespace_expire(void *data)
 
 			say_debug("expire tuple %p", tuple);
 			tbuf_append_field(keys_to_delete, tuple->data);
-		}
-		}
-		{TIME_THIS(expire_delete_tuples);
-		while (keys_to_delete->len > 0) {
-			struct box_txn *txn = txn_alloc(BOX_QUIET);
-			void *key = read_field(keys_to_delete);
+
+			struct box_txn *del_txn = txn_alloc(BOX_QUIET);
+			void *key = tuple_field(tuple, 0);
 			u32 key_cardinality = 1;
-
-			struct tbuf *req = tbuf_alloc(fiber->pool);
-			tbuf_append(req, &namespace->n, sizeof(u32));
-			tbuf_append(req, &key_cardinality, sizeof(key_cardinality));
-			tbuf_append_field(req, key);
-
-			box_dispach(txn, RW, DELETE, req);
+			struct tbuf *del_req = tbuf_alloc(fiber->pool);
+			tbuf_append(del_req, &namespace->n, sizeof(u32));
+			tbuf_append(del_req, &key_cardinality, sizeof(key_cardinality));
+			tbuf_append_field(del_req, key);
+			box_dispach(del_txn, RW, DELETE, del_req);
 			expired_tuples++;
-		}
+
+			struct box_txn *ins_txn = txn_alloc(BOX_QUIET);
+			u32 flags = 0;
+			i32 ins_namespace = namespace->expire_cemetery;
+			u32 ins_cardinality = 2;
+			void *field1 = tuple_field(tuple, 1);
+			void *field15 = tuple_field(tuple, 15);
+			struct tbuf *ins_req = tbuf_alloc(fiber->pool);
+			if (ins_namespace > -1 && field1 != NULL && field15 != NULL) {
+				say_crit("CEMETERY OK: %i %p %p", ins_namespace, field1, field15);
+				tbuf_append(ins_req, &ins_namespace, sizeof(u32));
+				tbuf_append(ins_req, &flags, sizeof(u32));
+				tbuf_append(ins_req, &ins_cardinality, sizeof(u32));
+				tbuf_append_field(ins_req, field1);
+				tbuf_append_field(ins_req, field15);
+				box_dispach(ins_txn, RW, INSERT, ins_req);
+			} else {
+				say_crit("CEMETERY FAIL: %i %p %p", ins_namespace, field1, field15);
+			}
 		}
 		stat_collect(stat_base, EXPIRE, expired_tuples);
 
@@ -1199,6 +1211,7 @@ custom_init(void)
 		namespace[i].expire_field = cfg.namespace[i]->expire_field;
 		namespace[i].expire_per_loop = cfg.namespace[i]->expire_per_loop;
 		namespace[i].expire_full_sweep = cfg.namespace[i]->expire_full_sweep;
+		namespace[i].expire_cemetery = cfg.namespace[i]->expire_cemetery;
 
 		if (cfg.namespace[i]->index == NULL)
 			panic("(namespace = %" PRIu32 ") at least one index must be defined", i);

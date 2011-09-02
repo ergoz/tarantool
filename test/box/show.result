@@ -70,6 +70,7 @@ configuration:
   namespace[0].expire_field: "-1"
   namespace[0].expire_per_loop: "1024"
   namespace[0].expire_full_sweep: "3600"
+  namespace[0].expire_cemetery: "-1"
   namespace[0].index[0].type: "HASH"
   namespace[0].index[0].unique: "1"
   namespace[0].index[0].key_field[0].fieldno: "0"
@@ -92,6 +93,7 @@ hash index statistics:
   n_occupied: 0
   size: 0
   resize_cnt: 0
+  resizing: 0
 ...
 save coredump
 ---

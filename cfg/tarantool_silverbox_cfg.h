@@ -32,6 +32,7 @@ typedef struct tarantool_cfg_namespace {
 	int32_t	expire_field;
 	int32_t	expire_per_loop;
 	int32_t	expire_full_sweep;
+	int32_t	expire_cemetery;
 	tarantool_cfg_namespace_index**	index;
 } tarantool_cfg_namespace;
 
