@@ -645,7 +645,7 @@ prepare_delete(struct box_txn *txn, void *key)
 	txn->old_tuple = txn->index->find(txn->index, key);
 
 	if (txn->old_tuple == NULL) {
-		if (!txn->in_recover) {
+		if (!(txn->flags & BOX_QUIET) && !txn->in_recover) {
 			u32 tuples_affected = 0;
 			add_iov_dup(&tuples_affected, sizeof(tuples_affected));
 		}
@@ -1039,8 +1039,8 @@ namespace_expire(void *data)
 			box_dispach(del_txn, RW, DELETE, del_req);
 			expired_tuples++;
 
-			struct box_txn *ins_txn = txn_alloc(BOX_QUIET);
-			u32 flags = 0;
+			struct box_txn *ins_txn = txn_alloc(0);
+			u32 flags = BOX_QUIET;
 			i32 ins_namespace = namespace->expire_cemetery;
 			u32 ins_cardinality = 2;
 			void *field1 = tuple_field(tuple, 1);
