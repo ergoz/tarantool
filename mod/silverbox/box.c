@@ -1023,7 +1023,8 @@ namespace_expire(void *data)
 
 			struct box_tuple *tuple = mh_value(map, i);
 
-			if (tuple->flags & GHOST || !namespace->tuple_expired(namespace, tuple))
+			if (tuple->flags & GHOST ||
+			    !namespace->tuple_expired(namespace, tuple))
 				continue;
 
 			say_debug("expire tuple %p", tuple);
@@ -1039,19 +1040,31 @@ namespace_expire(void *data)
 			box_dispach(del_txn, RW, DELETE, del_req);
 			expired_tuples++;
 
-			struct box_txn *ins_txn = txn_alloc(0);
-			u32 flags = BOX_QUIET;
-			i32 ins_namespace = namespace->expire_cemetery;
-			u32 ins_cardinality = 2;
 			void *field1 = tuple_field(tuple, 1);
-			void *field15 = tuple_field(tuple, 15);
-			struct tbuf *ins_req = tbuf_alloc(fiber->pool);
-			if (ins_namespace > -1 && field1 != NULL && field15 != NULL) {
+			if ((namespace->expire_cemetery > -1) && (field1 != NULL)) {
+				/* fill insert grave command */
+				struct tbuf *ins_req = tbuf_alloc(fiber->pool);
+				/* space number */
+				i32 ins_namespace = namespace->expire_cemetery;
 				tbuf_append(ins_req, &ins_namespace, sizeof(u32));
+				/* insert flags */
+				u32 flags = BOX_QUIET;
 				tbuf_append(ins_req, &flags, sizeof(u32));
+
+				/* create tomb tuple */
+				/* tuples cardinality */
+				u32 ins_cardinality = 2;
 				tbuf_append(ins_req, &ins_cardinality, sizeof(u32));
+				/* user's email */
 				tbuf_append_field(ins_req, field1);
-				tbuf_append_field(ins_req, field15);
+				/* funeral time in unix timestamp */
+				u32 ins_funeral_time = (u32) ev_now();
+				/* field's size */
+				write_varint32(ins_req, sizeof(u32));
+				/* field's value */
+				tbuf_append(ins_req, &ins_funeral_time, sizeof(u32));
+
+				struct box_txn *ins_txn = txn_alloc(0);
 				box_dispach(ins_txn, RW, INSERT, ins_req);
 			}
 		}
@@ -1393,7 +1406,6 @@ box_tuple_expired(struct namespace *namespace, struct box_tuple *tuple)
 	void *field = tuple_field(tuple, namespace->expire_field);
 	if (field == NULL)
 		return true;
-
 	u32 field_size = load_varint32(&field);
 	if (field_size != sizeof(u32))
 		return true;
