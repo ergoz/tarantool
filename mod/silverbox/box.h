@@ -48,7 +48,7 @@ struct namespace {
 			     if non zero background expire is enabled */
 	int expire_per_loop, expire_full_sweep; /* expire tunables */
 	bool (*tuple_expired)(struct namespace *, struct box_tuple *);
-	u32 expire_cemetery; /* if > -1, the namespace to put expired tuple to */
+	i32 expire_cemetery; /* if > -1, the namespace to put expired tuple to */
 };
 
 extern struct namespace *namespace;

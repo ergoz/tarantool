@@ -3896,6 +3896,7 @@ VALGRIND_PRINTF_BACKTRACE(const char *format, ...)
     VALGRIND_DO_CLIENT_REQUEST(_qzz_res, 0,                       \
                                VG_USERREQ__MALLOCLIKE_BLOCK,      \
                                addr, sizeB, rzB, is_zeroed, 0);   \
+    (void) _qzz_res;                                              \
    }
 
 /* See the comment for VALGRIND_MALLOCLIKE_BLOCK for details.
@@ -3906,6 +3907,7 @@ VALGRIND_PRINTF_BACKTRACE(const char *format, ...)
     VALGRIND_DO_CLIENT_REQUEST(_qzz_res, 0,                       \
                                VG_USERREQ__FREELIKE_BLOCK,        \
                                addr, rzB, 0, 0, 0);               \
+    (void) _qzz_res;                                              \
    }
 
 /* Create a memory pool. */
@@ -3914,6 +3916,7 @@ VALGRIND_PRINTF_BACKTRACE(const char *format, ...)
     VALGRIND_DO_CLIENT_REQUEST(_qzz_res, 0,                       \
                                VG_USERREQ__CREATE_MEMPOOL,        \
                                pool, rzB, is_zeroed, 0, 0);       \
+    (void) _qzz_res;                                              \
    }
 
 /* Destroy a memory pool. */
@@ -3922,6 +3925,7 @@ VALGRIND_PRINTF_BACKTRACE(const char *format, ...)
     VALGRIND_DO_CLIENT_REQUEST(_qzz_res, 0,                       \
                                VG_USERREQ__DESTROY_MEMPOOL,       \
                                pool, 0, 0, 0, 0);                 \
+    (void) _qzz_res;                                              \
    }
 
 /* Associate a piece of memory with a memory pool. */
@@ -3930,6 +3934,7 @@ VALGRIND_PRINTF_BACKTRACE(const char *format, ...)
     VALGRIND_DO_CLIENT_REQUEST(_qzz_res, 0,                       \
                                VG_USERREQ__MEMPOOL_ALLOC,         \
                                pool, addr, size, 0, 0);           \
+    (void) _qzz_res;                                              \
    }
 
 /* Disassociate a piece of memory from a memory pool. */
@@ -3938,6 +3943,7 @@ VALGRIND_PRINTF_BACKTRACE(const char *format, ...)
     VALGRIND_DO_CLIENT_REQUEST(_qzz_res, 0,                       \
                                VG_USERREQ__MEMPOOL_FREE,          \
                                pool, addr, 0, 0, 0);              \
+    (void) _qzz_res;                                              \
    }
 
 /* Disassociate any pieces outside a particular range. */
@@ -3946,6 +3952,7 @@ VALGRIND_PRINTF_BACKTRACE(const char *format, ...)
     VALGRIND_DO_CLIENT_REQUEST(_qzz_res, 0,                       \
                                VG_USERREQ__MEMPOOL_TRIM,          \
                                pool, addr, size, 0, 0);           \
+    (void) _qzz_res;                                              \
    }
 
 /* Resize and/or move a piece associated with a memory pool. */
@@ -3954,6 +3961,7 @@ VALGRIND_PRINTF_BACKTRACE(const char *format, ...)
     VALGRIND_DO_CLIENT_REQUEST(_qzz_res, 0,                       \
                                VG_USERREQ__MOVE_MEMPOOL,          \
                                poolA, poolB, 0, 0, 0);            \
+    (void) _qzz_res;                                              \
    }
 
 /* Resize and/or move a piece associated with a memory pool. */
@@ -3962,6 +3970,7 @@ VALGRIND_PRINTF_BACKTRACE(const char *format, ...)
     VALGRIND_DO_CLIENT_REQUEST(_qzz_res, 0,                       \
                                VG_USERREQ__MEMPOOL_CHANGE,        \
                                pool, addrA, addrB, size, 0);      \
+    (void) _qzz_res;                                              \
    }
 
 /* Return 1 if a mempool exists, else 0. */
@@ -3991,6 +4000,7 @@ VALGRIND_PRINTF_BACKTRACE(const char *format, ...)
     VALGRIND_DO_CLIENT_REQUEST(_qzz_res, 0,                       \
                                VG_USERREQ__STACK_DEREGISTER,      \
                                id, 0, 0, 0, 0);                   \
+    (void) _qzz_res;                                              \
    }
 
 /* Change the start and end address of the stack id. */
@@ -3999,6 +4009,7 @@ VALGRIND_PRINTF_BACKTRACE(const char *format, ...)
     VALGRIND_DO_CLIENT_REQUEST(_qzz_res, 0,                       \
                                VG_USERREQ__STACK_CHANGE,          \
                                id, start, end, 0, 0);             \
+    (void) _qzz_res;                                              \
    }
 
 /* Load PDB debug info for Wine PE image_map. */
@@ -4007,6 +4018,7 @@ VALGRIND_PRINTF_BACKTRACE(const char *format, ...)
     VALGRIND_DO_CLIENT_REQUEST(_qzz_res, 0,                       \
                                VG_USERREQ__LOAD_PDB_DEBUGINFO,    \
                                fd, ptr, total_size, delta, 0);    \
+    (void) _qzz_res;                                              \
    }
 
 
