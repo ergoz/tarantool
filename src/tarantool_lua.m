@@ -54,6 +54,17 @@
 struct lua_State *tarantool_L;
 
 /**
+ * Remember the LuaJIT FFI extension reference index
+ * to protect it from being garbage collected.
+ */
+static int ffi_ref = 0;
+
+/**
+ * Lua dofile() saved reference index.
+ */
+static int dofile_ref = 0;
+
+/**
  * Remember the output of the administrative console in the
  * registry, to use with 'print'.
  */
@@ -954,6 +965,41 @@ lbox_tonumber64(struct lua_State *L)
 }
 
 /**
+ * Check if a string is without parent path-prefix '..'
+ */
+static bool
+is_path_local(char *path)
+{
+	char prev = '\0', *p = path;
+	while (*p != '\0') {
+		if (*p == '.' && prev == '.')
+			return false;
+		prev = *p;
+		p++;
+	}
+	return true;
+}
+
+/**
+ * Sandboxed version of dofile().
+ * Append cfg.script_dir directory prefix to the filename and
+ * check if filename doesn't point outside of it.
+ */
+static int
+lbox_dofile(struct lua_State *L)
+{
+	char *file = (char*)luaL_checkstring(L, 1);
+	if (!is_path_local(file))
+		luaL_error(L, "dofile(): bad filename");
+	char path[PATH_MAX + 1];
+	snprintf(path, PATH_MAX, "%s/%s", cfg.script_dir, file);
+	/* removing old filename from the stack */
+	lua_pop(L, 1);
+	say_info("loading %s", path);
+	return luaL_dofile(L, path);
+}
+
+/**
  * A helper to register a single type metatable.
  */
 void
@@ -973,12 +1019,6 @@ tarantool_lua_register_type(struct lua_State *L, const char *type_name,
 	luaL_register(L, NULL, methods);
 	lua_pop(L, 1);
 }
-
-/**
- * Remember the LuaJIT FFI extension reference index
- * to protect it from being garbage collected.
- */
-static int ffi_ref = 0;
 
 struct lua_State *
 tarantool_lua_init()
@@ -1004,6 +1044,9 @@ tarantool_lua_init()
 	lua_register(L, "print", lbox_print);
 	lua_register(L, "pcall", lbox_pcall);
 	lua_register(L, "tonumber64", lbox_tonumber64);
+	lua_getglobal(L, "dofile");
+	dofile_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+	lua_register(L, "dofile", lbox_dofile);
 	L = mod_lua_init(L);
 	/* clear possible left-overs of init */
 	lua_settop(L, 0);
@@ -1014,6 +1057,7 @@ void
 tarantool_lua_close(struct lua_State *L)
 {
 	luaL_unref(L, LUA_REGISTRYINDEX, ffi_ref);
+	luaL_unref(L, LUA_REGISTRYINDEX, dofile_ref);
 	/* collects garbage, invoking userdata gc */
 	lua_close(L);
 }
@@ -1157,18 +1201,9 @@ static void
 load_init_script(void *L_ptr)
 {
 	struct lua_State *L = (struct lua_State *) L_ptr;
-
-	char path[PATH_MAX + 1];
-	snprintf(path, PATH_MAX, "%s/%s",
-		 cfg.script_dir, TARANTOOL_LUA_INIT_SCRIPT);
-
-
-	if (access(path, F_OK) == 0) {
-		say_info("loading %s", path);
-		/* Execute the init file. */
-		if (tarantool_lua_dofile(L, path))
-			panic("%s", lua_tostring(L, -1));
-	}
+	/* Execute the init file. */
+	if (tarantool_lua_dofile(L, TARANTOOL_LUA_INIT_SCRIPT))
+		panic("%s", lua_tostring(L, -1));
 	/*
 	 * The file doesn't exist. It's OK, tarantool may
 	 * have no init file.

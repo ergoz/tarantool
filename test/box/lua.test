@@ -1,6 +1,7 @@
 # encoding: tarantool
 import os
 import sys
+import shutil
 # Test Lua from admin console. Whenever producing output,
 # make sure it's a valid YAML.
 exec admin "lua"
@@ -85,7 +86,8 @@ exec admin "lua function field_x(space, key, field_index) return (box.select(spa
 exec sql "call field_x(0, 'pass', 0)"
 exec sql "call field_x(0, 'pass', 1)"
 exec sql "call box.delete(0, 'pass')"
-fifo_lua = os.path.abspath("box/fifo.lua")
+shutil.copy("box/fifo.lua", vardir)
+fifo_lua = "fifo.lua"
 # don't log the path name
 sys.stdout.push_filter("lua dofile(.*)", "lua dofile(...)")
 exec admin "lua dofile('{0}')".format(fifo_lua)
@@ -277,7 +279,8 @@ print """
 #
 """
 
-box_fiber_lua = os.path.abspath("box/box_fiber.lua")
+shutil.copy("box/box_fiber.lua", vardir)
+box_fiber_lua = "box_fiber.lua"
 # don't log the path name
 sys.stdout.push_filter("lua dofile(.*)", "lua dofile(...)")
 exec admin "lua dofile('{0}')".format(box_fiber_lua)
@@ -463,4 +466,7 @@ exec admin "lua t:slice(9, 10)"
 exec admin "lua t:slice(500, 700)"
 exec admin "lua box.space[0]:truncate()"
 
-
+print """
+# Test for dofile() sandboxing
+"""
+exec admin "lua dofile('../box/test_init.lua')"
