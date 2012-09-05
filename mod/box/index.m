@@ -31,9 +31,11 @@
 #include "say.h"
 #include "tuple.h"
 #include "pickle.h"
+#include <palloc.h>
 #include "exception.h"
 #include "space.h"
-#include "assoc.h"
+
+#include <stdio.h>
 
 static struct index_traits index_traits = {
 	.allows_partial_key = true,
@@ -42,9 +44,6 @@ static struct index_traits index_traits = {
 static struct index_traits hash_index_traits = {
 	.allows_partial_key = false,
 };
-
-const char *field_data_type_strs[] = {"NUM", "NUM64", "STR", "\0"};
-const char *index_type_strs[] = { "HASH", "TREE", "\0" };
 
 static struct tuple *
 iterator_next_equal(struct iterator *it __attribute__((unused)))
@@ -69,35 +68,25 @@ check_key_parts(struct key_def *key_def,
 	if (!partial_key_allowed && part_count < key_def->part_count)
 		tnt_raise(ClientError, :ER_EXACT_MATCH,
 			  part_count, key_def->part_count);
+
 }
 
 /* {{{ Index -- base class for all indexes. ********************/
 
-@interface HashIndex: Index
+@interface HashIndex: Index {
+	/* Hash table impl. */
+	struct mh_tuple_table_t *hash;
+
+	/* Shared temporary description of key data. */
+	struct tuple *key_tuple;
+}
+
 - (void) reserve: (u32) n_tuples;
 @end
 
-@interface HashStrIndex: HashIndex {
-	 struct mh_lstrptr_t *str_hash;
-};
-@end
-
-@interface Hash64Index: HashIndex {
-	struct mh_i64ptr_t *int64_hash;
-};
-@end
-
-@interface Hash32Index: HashIndex {
-	 struct mh_i32ptr_t *int_hash;
-};
-@end
-
-
 @implementation Index
 
-@class Hash32Index;
-@class Hash64Index;
-@class HashStrIndex;
+@class HashIndex;
 @class TreeIndex;
 
 + (struct index_traits *) traits
@@ -111,20 +100,7 @@ check_key_parts(struct key_def *key_def,
 {
 	switch (type) {
 	case HASH:
-		/* Hash index, check key type.
-		 * Hash index always has a single-field key.
-		 */
-		switch (key_def->parts[0].type) {
-		case NUM:
-			return [Hash32Index alloc]; /* 32-bit integer hash */
-		case NUM64:
-			return [Hash64Index alloc]; /* 64-bit integer hash */
-		case STRING:
-			return [HashStrIndex alloc]; /* string hash */
-		default:
-			break;
-		}
-		break;
+		return [HashIndex alloc];
 	case TREE:
 		return [TreeIndex alloc: key_def :space];
 	default:
@@ -263,9 +239,184 @@ check_key_parts(struct key_def *key_def,
 
 /* {{{ HashIndex -- base class for all hashes. ********************/
 
+#include <third_party/murmur_hash2.c>
+
+static inline struct index_key *
+tuple_key(struct tuple *tuple)
+{
+	return (struct index_key *) tuple->data;
+}
+
+static struct tuple *
+create_key_tuple(struct key_def *key_def)
+{
+	struct tuple *tuple = tuple_alloc(sizeof(struct index_key), NULL);
+	tuple->flags |= KEY_TUPLE;
+
+	struct index_key *index_key = tuple_key(tuple);
+	index_key->data = NULL;
+	index_key->part_count = key_def->part_count;
+
+	index_key->parts = malloc(sizeof(struct key_part)
+				  * key_def->part_count);
+	if (index_key->parts == NULL)
+		abort();
+
+	index_key->part_desc = malloc(sizeof(struct field_desc)
+				      * key_def->part_count);
+	if (index_key->part_desc == NULL)
+		abort();
+
+	for (int i = 0; i < key_def->part_count; i++) {
+		index_key->part_desc[i].type = key_def->parts[i].type;
+		index_key->part_desc[i].base = 0;
+		index_key->part_desc[i].disp = 0;
+
+		index_key->parts[i].type = key_def->parts[i].type;
+		index_key->parts[i].fieldno = i;
+	}
+
+	return tuple;
+}
+
+static void
+free_key_tuple(struct tuple *tuple)
+{
+	struct index_key *index_key = tuple_key(tuple);
+	free(index_key->part_desc);
+	tuple_free(tuple);
+}
+
+static void
+set_key_tuple_data(struct tuple *tuple, void *key, int part_count)
+{
+	struct index_key *index_key = tuple_key(tuple);
+	assert(index_key->part_count == part_count);
+	index_key->data = key;
+
+	for (int part = 1; part < part_count; part++) {
+		u32 len = load_varint32((void**) &key);
+		key += len;
+		index_key->part_desc[part].disp = key - index_key->data;
+	}
+}
+
+static void
+set_hash_data(struct index_key *index_key, Index *index, struct tuple *tuple)
+{
+	if ((tuple->flags & KEY_TUPLE) != 0) {
+		*index_key = *tuple_key(tuple);
+	} else {
+		index_key->data = tuple->data;
+		index_key->part_count = index->key_def->part_count;
+		index_key->part_desc = index->space->field_desc;
+		index_key->parts = index->key_def->parts;
+	}
+}
+
+static void
+check_tuple(HashIndex *index, struct tuple *tuple)
+{
+	struct index_key index_key;
+	set_hash_data(&index_key, index, tuple);
+
+	for (int part = 0; part < index_key.part_count; part++) {
+		int field = index_key.parts[part].fieldno;
+		u8 *data = index_key.data + index_key.part_desc[field].disp;
+		if (index_key.part_desc[field].base) {
+			assert((tuple->flags & IN_SPACE) != 0);
+			assert((tuple->flags & KEY_TUPLE) == 0);
+			data += space_get_base_offset(index->space, tuple,
+						      index_key.part_desc[field].base);
+		}
+		u32 len = load_varint32((void**) &data);
+		if (index_key.part_desc[field].type == NUM) {
+			if (len != 4)
+				tnt_raise(ClientError, :ER_KEY_FIELD_TYPE, "u32");
+		} else if (index_key.part_desc[field].type == NUM64) {
+			if (len != 8)
+				tnt_raise(ClientError, :ER_KEY_FIELD_TYPE, "u64");
+		}
+	}
+}
+
+static uint32_t
+hash_tuple(HashIndex *index, struct tuple *tuple)
+{
+	struct index_key index_key;
+	set_hash_data(&index_key, index, tuple);
+
+	uint32_t h = 13;
+	for (int part = 0; part < index_key.part_count; part++) {
+		int field = index_key.parts[part].fieldno;
+		u8 *data = index_key.data + index_key.part_desc[field].disp;
+		if (index_key.part_desc[field].base) {
+			assert((tuple->flags & IN_SPACE) != 0);
+			assert((tuple->flags & KEY_TUPLE) == 0);
+			data += space_get_base_offset(index->space, tuple,
+						      index_key.part_desc[field].base);
+		}
+		u32 len = load_varint32((void**) &data);
+		h = MurmurHash2(data, len, h);
+	}
+
+	return h;
+}
+
+static int
+hash_tuple_eq(HashIndex *index, struct tuple *tuple_a, struct tuple *tuple_b)
+{
+	struct index_key index_key_a;
+	struct index_key index_key_b;
+	set_hash_data(&index_key_a, index, tuple_a);
+	set_hash_data(&index_key_b, index, tuple_b);
+
+	if (index_key_a.part_count != index_key_b.part_count)
+		return 0;
+
+	for (int part = 0; part < index_key_a.part_count; part++) {
+		int field_a = index_key_a.parts[part].fieldno;
+		int field_b = index_key_b.parts[part].fieldno;
+
+		u8 *data_a = index_key_a.data + index_key_a.part_desc[field_a].disp;
+		if (index_key_a.part_desc[field_a].base) {
+			assert((tuple_a->flags & IN_SPACE) != 0);
+			assert((tuple_a->flags & KEY_TUPLE) == 0);
+			data_a += space_get_base_offset(index->space, tuple_a,
+							index_key_a.part_desc[field_a].base);
+		}
+
+		u8 *data_b = index_key_b.data + index_key_b.part_desc[field_b].disp;
+		if (index_key_b.part_desc[field_b].base) {
+			assert((tuple_b->flags & IN_SPACE) != 0);
+			assert((tuple_b->flags & KEY_TUPLE) == 0);
+			data_b += space_get_base_offset(index->space, tuple_b,
+							index_key_b.part_desc[field_b].base);
+		}
+
+		u32 len_a = load_varint32((void**) &data_a);
+		u32 len_b = load_varint32((void**) &data_b);
+		if (len_a != len_b)
+			return 0;
+
+		if (memcmp(data_a, data_b, len_a) != 0)
+			return 0;
+	}
+
+	return 1;
+}
+
+#define mh_name _tuple_table
+#define mh_ext_t HashIndex *
+#define mh_val_t struct tuple *
+#define mh_hash(x, v) hash_tuple(x, v)
+#define mh_eq(x, a, b) hash_tuple_eq(x, (a), (b))
+#define MH_SOURCE 1
+#include <mhash-val.h>
+
 struct hash_iterator {
 	struct iterator base; /* Must be the first member. */
-	struct mh_i32ptr_t *hash;
+	struct mh_tuple_table_t *hash;
 	mh_int_t h_pos;
 };
 
@@ -304,10 +455,27 @@ hash_iterator_free(struct iterator *iterator)
 	return &hash_index_traits;
 }
 
+- (id) init: (struct key_def *) key_def_arg :(struct space *) space_arg
+{
+	self = [super init: key_def_arg :space_arg];
+	if (self) {
+		hash = mh_tuple_table_init();
+		hash->ext = self;
+		key_tuple = create_key_tuple(key_def);
+	}
+	return self;
+}
+
+- (void) free
+{
+	free_key_tuple(key_tuple);
+	mh_tuple_table_destroy(hash);
+	[super free];
+}
+
 - (void) reserve: (u32) n_tuples
 {
-	(void) n_tuples;
-	[self subclassResponsibility: _cmd];
+	mh_tuple_table_reserve(hash, n_tuples);
 }
 
 - (void) beginBuild
@@ -343,9 +511,9 @@ hash_iterator_free(struct iterator *iterator)
 	      [self replace: NULL :tuple];
 }
 
-- (void) free
+- (size_t) size
 {
-	[super free];
+	return mh_size(hash);
 }
 
 - (struct tuple *) min
@@ -360,14 +528,77 @@ hash_iterator_free(struct iterator *iterator)
 	return NULL;
 }
 
+- (struct tuple *) findUnsafe: (void *) key :(int) part_count
+{
+	set_key_tuple_data(key_tuple, key, part_count);
+	check_tuple(self, key_tuple);
+	mh_int_t k = mh_tuple_table_get(hash, key_tuple);
+	struct tuple *ret = NULL;
+	if (k != mh_end(hash))
+		ret = mh_value(hash, k);
+	return ret;
+}
+
 - (struct tuple *) findByTuple: (struct tuple *) tuple
 {
-	/* Hash index currently is always single-part. */
-	void *field = tuple_field(tuple, key_def->parts[0].fieldno);
-	if (field == NULL)
-		tnt_raise(ClientError, :ER_NO_SUCH_FIELD,
-			  key_def->parts[0].fieldno);
-	return [self findUnsafe :field :1];
+	check_tuple(self, tuple);
+	mh_int_t k = mh_tuple_table_get(hash, tuple);
+	struct tuple *ret = NULL;
+	if (k != mh_end(hash))
+		ret = mh_value(hash, k);
+	return ret;
+}
+
+- (void) remove: (struct tuple *) tuple
+{
+	check_tuple(self, tuple);
+	mh_int_t k = mh_tuple_table_get(hash, tuple);
+	if (k != mh_end(hash))
+		mh_tuple_table_del(hash, k);
+}
+
+- (void) replace: (struct tuple *) old_tuple
+	:(struct tuple *) new_tuple
+{
+	if (old_tuple != NULL) {
+		check_tuple(self, old_tuple);
+		mh_int_t k = mh_tuple_table_get(hash, old_tuple);
+		if (k != mh_end(hash))
+			mh_tuple_table_del(hash, k);
+	}
+	mh_tuple_table_put(hash, new_tuple, NULL);
+}
+
+- (void) initIterator: (struct iterator *) iterator :(enum iterator_type) type
+{
+	assert(iterator->next == hash_iterator_next);
+	struct hash_iterator *it = hash_iterator(iterator);
+
+	if (type == ITER_REVERSE)
+		tnt_raise(IllegalParams, :"hash iterator is forward only");
+
+	it->base.next_equal = 0; /* Should not be used if not positioned. */
+	it->h_pos = mh_begin(hash);
+	it->hash = hash;
+}
+
+- (void) initIteratorUnsafe: (struct iterator *) iterator
+			   :(enum iterator_type) type
+			   :(void *) key :(int) part_count
+{
+	if (type == ITER_REVERSE)
+		tnt_raise(IllegalParams, :"hash iterator is forward only");
+
+	assert(iterator->next == hash_iterator_next);
+	struct hash_iterator *it = hash_iterator(iterator);
+
+	it->base.next_equal = iterator_first_equal;
+
+	set_key_tuple_data(key_tuple, key, part_count);
+	check_tuple(self, key_tuple);
+	it->h_pos = mh_tuple_table_get(hash, key_tuple);
+
+	it->hash = hash;
 }
 
 - (struct iterator *) allocIterator
@@ -384,361 +615,3 @@ hash_iterator_free(struct iterator *iterator)
 @end
 
 /* }}} */
-
-/* {{{ Hash32Index ************************************************/
-
-static u32
-int32_key_to_value(void *key)
-{
-	u32 key_size = load_varint32(&key);
-	if (key_size != 4)
-		tnt_raise(ClientError, :ER_KEY_FIELD_TYPE, "u32");
-	return *((u32 *) key);
-}
-
-
-@implementation Hash32Index
-
-- (void) reserve: (u32) n_tuples
-{
-	mh_i32ptr_reserve(int_hash, n_tuples);
-}
-
-- (void) free
-{
-	mh_i32ptr_destroy(int_hash);
-	[super free];
-}
-
-- (id) init: (struct key_def *) key_def_arg :(struct space *) space_arg
-{
-	self = [super init: key_def_arg :space_arg];
-	if (self) {
-		int_hash = mh_i32ptr_init();
-	}
-	return self;
-}
-
-- (size_t) size
-{
-	return mh_size(int_hash);
-}
-
-- (struct tuple *) findUnsafe: (void *) key :(int) part_count
-{
-	(void) part_count;
-
-	struct tuple *ret = NULL;
-	u32 num = int32_key_to_value(key);
-	mh_int_t k = mh_i32ptr_get(int_hash, num);
-	if (k != mh_end(int_hash))
-		ret = mh_value(int_hash, k);
-#ifdef DEBUG
-	say_debug("Hash32Index find(self:%p, key:%i) = %p", self, num, ret);
-#endif
-	return ret;
-}
-
-- (void) remove: (struct tuple *) tuple
-{
-	void *field = tuple_field(tuple, key_def->parts[0].fieldno);
-	u32 num = int32_key_to_value(field);
-	mh_int_t k = mh_i32ptr_get(int_hash, num);
-	if (k != mh_end(int_hash))
-		mh_i32ptr_del(int_hash, k);
-#ifdef DEBUG
-	say_debug("Hash32Index remove(self:%p, key:%i)", self, num);
-#endif
-}
-
-- (void) replace: (struct tuple *) old_tuple
-	:(struct tuple *) new_tuple
-{
-	void *field = tuple_field(new_tuple, key_def->parts[0].fieldno);
-	u32 num = int32_key_to_value(field);
-
-	if (old_tuple != NULL) {
-		void *old_field = tuple_field(old_tuple,
-					      key_def->parts[0].fieldno);
-		load_varint32(&old_field);
-		u32 old_num = *(u32 *)old_field;
-		mh_int_t k = mh_i32ptr_get(int_hash, old_num);
-		if (k != mh_end(int_hash))
-			mh_i32ptr_del(int_hash, k);
-	}
-
-	mh_i32ptr_put(int_hash, num, new_tuple, NULL);
-
-#ifdef DEBUG
-	say_debug("Hash32Index replace(self:%p, old_tuple:%p, new_tuple:%p) key:%i",
-		  self, old_tuple, new_tuple, num);
-#endif
-}
-
-- (void) initIterator: (struct iterator *) iterator :(enum iterator_type) type
-{
-	assert(iterator->next == hash_iterator_next);
-	struct hash_iterator *it = hash_iterator(iterator);
-
-	if (type == ITER_REVERSE)
-		tnt_raise(IllegalParams, :"hash iterator is forward only");
-
-	it->base.next_equal = 0; /* Should not be used. */
-	it->h_pos = mh_begin(int_hash);
-	it->hash = int_hash;
-}
-
-- (void) initIteratorUnsafe: (struct iterator *) iterator :(enum iterator_type) type
-                        :(void *) key :(int) part_count
-{
-	(void) part_count;
-	if (type == ITER_REVERSE)
-		tnt_raise(IllegalParams, :"hash iterator is forward only");
-
-	assert(iterator->next == hash_iterator_next);
-	struct hash_iterator *it = hash_iterator(iterator);
-
-	u32 num = int32_key_to_value(key);
-	it->base.next_equal = iterator_first_equal;
-	it->h_pos = mh_i32ptr_get(int_hash, num);
-	it->hash = int_hash;
-}
-@end
-
-/* }}} */
-
-/* {{{ Hash64Index ************************************************/
-
-static u64
-int64_key_to_value(void *key)
-{
-	u32 key_size = load_varint32(&key);
-	if (key_size != 8)
-		tnt_raise(ClientError, :ER_KEY_FIELD_TYPE, "u64");
-	return *((u64 *) key);
-}
-
-@implementation Hash64Index
-- (void) reserve: (u32) n_tuples
-{
-	mh_i64ptr_reserve(int64_hash, n_tuples);
-}
-
-- (void) free
-{
-	mh_i64ptr_destroy(int64_hash);
-	[super free];
-}
-
-- (id) init: (struct key_def *) key_def_arg :(struct space *) space_arg
-{
-	self = [super init: key_def_arg :space_arg];
-	if (self) {
-		int64_hash = mh_i64ptr_init();
-	}
-	return self;
-}
-
-- (size_t) size
-{
-	return mh_size(int64_hash);
-}
-
-- (struct tuple *) findUnsafe: (void *) key :(int) part_count
-{
-	(void) part_count;
-
-	struct tuple *ret = NULL;
-	u64 num = int64_key_to_value(key);
-	mh_int_t k = mh_i64ptr_get(int64_hash, num);
-	if (k != mh_end(int64_hash))
-		ret = mh_value(int64_hash, k);
-#ifdef DEBUG
-	say_debug("Hash64Index find(self:%p, key:%"PRIu64") = %p", self, num, ret);
-#endif
-	return ret;
-}
-
-- (void) remove: (struct tuple *) tuple
-{
-	void *field = tuple_field(tuple, key_def->parts[0].fieldno);
-	u64 num = int64_key_to_value(field);
-
-	mh_int_t k = mh_i64ptr_get(int64_hash, num);
-	if (k != mh_end(int64_hash))
-		mh_i64ptr_del(int64_hash, k);
-#ifdef DEBUG
-	say_debug("Hash64Index remove(self:%p, key:%"PRIu64")", self, num);
-#endif
-}
-
-- (void) replace: (struct tuple *) old_tuple
-	:(struct tuple *) new_tuple
-{
-	void *field = tuple_field(new_tuple, key_def->parts[0].fieldno);
-	u64 num = int64_key_to_value(field);
-
-	if (old_tuple != NULL) {
-		void *old_field = tuple_field(old_tuple,
-					      key_def->parts[0].fieldno);
-		load_varint32(&old_field);
-		u64 old_num = *(u64 *)old_field;
-		mh_int_t k = mh_i64ptr_get(int64_hash, old_num);
-		if (k != mh_end(int64_hash))
-			mh_i64ptr_del(int64_hash, k);
-	}
-
-	mh_i64ptr_put(int64_hash, num, new_tuple, NULL);
-#ifdef DEBUG
-	say_debug("Hash64Index replace(self:%p, old_tuple:%p, tuple:%p) key:%"PRIu64,
-		  self, old_tuple, new_tuple, num);
-#endif
-}
-
-- (void) initIterator: (struct iterator *) iterator :(enum iterator_type) type
-{
-	assert(iterator->next == hash_iterator_next);
-	struct hash_iterator *it = hash_iterator(iterator);
-
-	if (type == ITER_REVERSE)
-		tnt_raise(IllegalParams, :"hash iterator is forward only");
-
-	it->base.next_equal = 0; /* Should not be used if not positioned. */
-	it->h_pos = mh_begin(int64_hash);
-	it->hash = (struct mh_i32ptr_t *) int64_hash;
-}
-
-- (void) initIteratorUnsafe: (struct iterator *) iterator :(enum iterator_type) type
-                        :(void *) key :(int) part_count
-{
-	(void) part_count;
-	if (type == ITER_REVERSE)
-		tnt_raise(IllegalParams, :"hash iterator is forward only");
-
-	assert(iterator->next == hash_iterator_next);
-	struct hash_iterator *it = hash_iterator(iterator);
-
-	u64 num = int64_key_to_value(key);
-
-	it->base.next_equal = iterator_first_equal;
-	it->h_pos = mh_i64ptr_get(int64_hash, num);
-	it->hash = (struct mh_i32ptr_t *) int64_hash;
-}
-@end
-
-/* }}} */
-
-/* {{{ HashStrIndex ***********************************************/
-
-@implementation HashStrIndex
-- (void) reserve: (u32) n_tuples
-{
-	mh_lstrptr_reserve(str_hash, n_tuples);
-}
-
-- (void) free
-{
-	mh_lstrptr_destroy(str_hash);
-	[super free];
-}
-
-- (id) init: (struct key_def *) key_def_arg :(struct space *) space_arg
-{
-	self = [super init: key_def_arg :space_arg];
-	if (self) {
-		str_hash = mh_lstrptr_init();
-	}
-	return self;
-}
-
-- (size_t) size
-{
-	return mh_size(str_hash);
-}
-
-- (struct tuple *) findUnsafe: (void *) key :(int) part_count
-{
-	(void) part_count;
-	struct tuple *ret = NULL;
-	mh_int_t k = mh_lstrptr_get(str_hash, key);
-	if (k != mh_end(str_hash))
-		ret = mh_value(str_hash, k);
-#ifdef DEBUG
-	u32 key_size = load_varint32(&key);
-	say_debug("HashStrIndex find(self:%p, key:(%i)'%.*s') = %p",
-		  self, key_size, key_size, (u8 *)key, ret);
-#endif
-	return ret;
-}
-
-- (void) remove: (struct tuple *) tuple
-{
-	void *field = tuple_field(tuple, key_def->parts[0].fieldno);
-
-	mh_int_t k = mh_lstrptr_get(str_hash, field);
-	if (k != mh_end(str_hash))
-		mh_lstrptr_del(str_hash, k);
-#ifdef DEBUG
-	u32 field_size = load_varint32(&field);
-	say_debug("HashStrIndex remove(self:%p, key:'%.*s')",
-		  self, field_size, (u8 *)field);
-#endif
-}
-
-- (void) replace: (struct tuple *) old_tuple
-	:(struct tuple *) new_tuple
-{
-	void *field = tuple_field(new_tuple, key_def->parts[0].fieldno);
-
-	if (field == NULL)
-		tnt_raise(ClientError, :ER_NO_SUCH_FIELD,
-			  key_def->parts[0].fieldno);
-
-	if (old_tuple != NULL) {
-		void *old_field = tuple_field(old_tuple,
-					      key_def->parts[0].fieldno);
-		mh_int_t k = mh_lstrptr_get(str_hash, old_field);
-		if (k != mh_end(str_hash))
-			mh_lstrptr_del(str_hash, k);
-	}
-
-	mh_lstrptr_put(str_hash, field, new_tuple, NULL);
-#ifdef DEBUG
-	u32 field_size = load_varint32(&field);
-	say_debug("HashStrIndex replace(self:%p, old_tuple:%p, tuple:%p) key:'%.*s'",
-		  self, old_tuple, new_tuple, field_size, (u8 *)field);
-#endif
-}
-
-- (void) initIterator: (struct iterator *) iterator :(enum iterator_type) type
-{
-	assert(iterator->next == hash_iterator_next);
-	struct hash_iterator *it = hash_iterator(iterator);
-
-	if (type == ITER_REVERSE)
-		tnt_raise(IllegalParams, :"hash iterator is forward only");
-
-	it->base.next_equal = 0; /* Should not be used if not positioned. */
-	it->h_pos = mh_begin(str_hash);
-	it->hash = (struct mh_i32ptr_t *) str_hash;
-}
-
-- (void) initIteratorUnsafe: (struct iterator *) iterator
-			:(enum iterator_type) type
-                        :(void *) key :(int) part_count
-{
-	(void) part_count;
-	if (type == ITER_REVERSE)
-		tnt_raise(IllegalParams, :"hash iterator is forward only");
-
-	assert(iterator->next == hash_iterator_next);
-	struct hash_iterator *it = hash_iterator(iterator);
-
-	it->base.next_equal = iterator_first_equal;
-	it->h_pos = mh_lstrptr_get(str_hash, key);
-	it->hash = (struct mh_i32ptr_t *) str_hash;
-}
-@end
-
-/* }}} */
-

@@ -95,7 +95,7 @@ port_send_tuple(u32 flags, Port *port, struct tuple *tuple)
 	if (data->size == 0 || data->size != valid_tuple(data, field_count))
 		tnt_raise(IllegalParams, :"incorrect tuple length");
 
-	txn->new_tuple = tuple_alloc(data->size);
+	txn->new_tuple = tuple_alloc(data->size, sp);
 	tuple_ref(txn->new_tuple, 1);
 	txn->new_tuple->field_count = field_count;
 	memcpy(txn->new_tuple->data, data->data, data->size);
@@ -109,6 +109,7 @@ port_send_tuple(u32 flags, Port *port, struct tuple *tuple)
 		tnt_raise(ClientError, :ER_TUPLE_NOT_FOUND);
 
 	space_validate(sp, old_tuple, txn->new_tuple);
+	space_adjust(sp, txn->new_tuple);
 
 	txn_add_undo(txn, sp, old_tuple, txn->new_tuple);
 
@@ -728,10 +729,11 @@ update_read_ops(struct tbuf *data, u32 op_cnt)
 						       old_tuple);
 		/* allocate new tuple */
 		size_t new_tuple_len = update_calc_new_tuple_length(rope);
-		txn->new_tuple = tuple_alloc(new_tuple_len);
+		txn->new_tuple = tuple_alloc(new_tuple_len, sp);
 		tuple_ref(txn->new_tuple, 1);
 		do_update_ops(rope, txn->new_tuple);
 		space_validate(sp, old_tuple, txn->new_tuple);
+		space_adjust(sp, txn->new_tuple);
 	}
 	txn_add_undo(txn, sp, old_tuple, txn->new_tuple);
 	port_send_tuple(flags, port, txn->new_tuple);

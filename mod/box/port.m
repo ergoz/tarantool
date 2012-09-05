@@ -198,7 +198,7 @@ void iov_add_ret(struct lua_State *L, int index)
 	{
 		size_t len = sizeof(u32);
 		u32 num = lua_tointeger(L, index);
-		tuple = tuple_alloc(len + varint32_sizeof(len));
+		tuple = tuple_alloc(len + varint32_sizeof(len), NULL);
 		tuple->field_count = 1;
 		memcpy(save_varint32(tuple->data, len), &num, len);
 		break;
@@ -207,7 +207,7 @@ void iov_add_ret(struct lua_State *L, int index)
 	{
 		u64 num = tarantool_lua_tointeger64(L, index);
 		size_t len = sizeof(u64);
-		tuple = tuple_alloc(len + varint32_sizeof(len));
+		tuple = tuple_alloc(len + varint32_sizeof(len), NULL);
 		tuple->field_count = 1;
 		memcpy(save_varint32(tuple->data, len), &num, len);
 		break;
@@ -216,7 +216,7 @@ void iov_add_ret(struct lua_State *L, int index)
 	{
 		size_t len;
 		const char *str = lua_tolstring(L, index, &len);
-		tuple = tuple_alloc(len + varint32_sizeof(len));
+		tuple = tuple_alloc(len + varint32_sizeof(len), NULL);
 		tuple->field_count = 1;
 		memcpy(save_varint32(tuple->data, len), str, len);
 		break;
@@ -226,7 +226,7 @@ void iov_add_ret(struct lua_State *L, int index)
 	{
 		const char *str = tarantool_lua_tostring(L, index);
 		size_t len = strlen(str);
-		tuple = tuple_alloc(len + varint32_sizeof(len));
+		tuple = tuple_alloc(len + varint32_sizeof(len), NULL);
 		tuple->field_count = 1;
 		memcpy(save_varint32(tuple->data, len), str, len);
 		break;

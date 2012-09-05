@@ -26,7 +26,9 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+
 #include "tuple.h"
+#include "space.h"
 
 #include <pickle.h>
 #include <salloc.h>
@@ -36,12 +38,23 @@
 
 /** Allocate a tuple */
 struct tuple *
-tuple_alloc(size_t size)
+tuple_alloc(size_t size, struct space *sp)
 {
-	size_t total = sizeof(struct tuple) + size;
-	struct tuple *tuple = salloc(total, "tuple");
+	size_t overhead = sp ? space_tuple_overhead(sp) : 0;
+	size_t total = sizeof(struct tuple) + size + overhead;
 
-	tuple->flags = tuple->refs = 0;
+	u8 *ptr = salloc(total, "tuple");
+	struct tuple *tuple = (struct tuple *) (ptr + overhead);
+
+	memset(ptr, 0, overhead);
+	tuple->refs = 0;
+	if (sp) {
+		tuple->flags = IN_SPACE;
+		tuple->space = space_n(sp);
+	} else {
+		tuple->flags = 0;
+		tuple->space = 0;
+	}
 	tuple->bsize = size;
 
 	say_debug("tuple_alloc(%zu) = %p", size, tuple);
@@ -57,7 +70,15 @@ tuple_free(struct tuple *tuple)
 {
 	say_debug("tuple_free(%p)", tuple);
 	assert(tuple->refs == 0);
-	sfree(tuple);
+
+	u8 *ptr = (u8 *) tuple;
+	if ((tuple->flags & IN_SPACE) != 0) {
+		struct space *sp = &spaces[tuple->space];
+		size_t overhead = space_tuple_overhead(sp);
+		ptr -= overhead;
+	}
+
+	sfree(ptr);
 }
 
 /**

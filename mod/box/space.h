@@ -38,8 +38,66 @@ enum {
 	BOX_SPACE_MAX = 256,
 };
 
+/* Index types. */
+enum index_type { HASH, TREE, index_type_MAX };
+extern const char *index_type_strs[];
+
+/*
+ * Possible field data types. Can't use STRS/ENUM macros for them,
+ * since there is a mismatch between enum name (STRING) and type
+ * name literal ("STR"). STR is already used as Objective C type.
+ */
+enum field_data_type { UNKNOWN = -1, NUM = 0, NUM64, STRING, field_data_type_MAX };
+extern const char *field_data_type_strs[];
+
+/** Descriptor of a single part in a multipart key. */
+struct key_part {
+	int fieldno;
+	enum field_data_type type;
+};
+
+/** Descriptor of key part data layout. */
+struct field_desc {
+	/** Field type. */
+	i16 type;
+	/** Field base offset. */
+	i32 base;
+	/** Field displacement. */
+	u32 disp;
+};
+
+/** Descriptor of a multipart key. */
+struct key_def {
+
+	/* Description of parts of a multipart index. */
+	struct key_part *parts;
+
+	/*
+	 * An array holding field positions in 'parts' array.
+	 * Imagine there is index[1] = { key_field[0].fieldno=5,
+	 * key_field[1].fieldno=3 }.
+	 * 'parts' array for such index contains data from
+	 * key_field[0] and key_field[1] respectively.
+	 * max_fieldno is 5, and cmp_order array holds offsets of
+	 * field 3 and 5 in 'parts' array: -1, -1, 0, -1, 1.
+	 */
+	u32 *cmp_order;
+
+	/* The size of the 'parts' array. */
+	int part_count;
+
+	/*
+	 * The size of 'cmp_order' array (= max fieldno in 'parts'
+	 * array).
+	 */
+	int max_fieldno;
+
+	bool is_unique;
+};
+
 struct space {
 	Index *index[BOX_INDEX_MAX];
+
 	/** If not set (is 0), any tuple in the
 	 * space can have any number of fields (but
 	 * @sa max_fieldno). If set, Each tuple
@@ -62,13 +120,11 @@ struct space {
 
 	/**
 	 * Field types of indexed fields. This is an array of size
-	 * field_count. If there are gaps, i.e. fields that do not
+	 * max_fieldno. If there are gaps, i.e. fields that do not
 	 * participate in any index and thus we cannot infer their
 	 * type, then respective array members have value UNKNOWN.
-	 * XXX: right now UNKNOWN is also set for fields which types
-	 * in two indexes contradict each other.
 	 */
-	enum field_data_type *field_types;
+	struct field_desc *field_desc;
 
 	/**
 	 * Max field no which participates in any of the space indexes.
@@ -76,6 +132,13 @@ struct space {
 	 * field_count fields.
 	 */
 	int max_fieldno;
+
+	/**
+	 * The number of fields for which there is space reserved in
+	 * every tuple to keep their offset. This is used to speedup
+	 * access to key fields with variable offset.
+	 */
+	int base_count;
 
 	bool enabled;
 };
@@ -90,11 +153,33 @@ space_n(struct space *sp)
 	return sp - spaces;
 }
 
+/** Get the extra size needed for tuples in the given space */
+static inline size_t
+space_tuple_overhead(struct space *space)
+{
+	return space->base_count * sizeof(u32);
+}
+
+static inline u32
+space_get_base_offset(struct space *space, struct tuple *tuple, int index)
+{
+	assert(index > 0 && index <= space->base_count);
+	return ((u32 *) tuple)[-index];
+}
+
+static inline void
+space_set_base_offset(struct space *space, struct tuple *tuple, int index, u32 value)
+{
+	assert(index > 0 && index <= space->base_count);
+	((u32 *) tuple)[-index] = value;
+}
+
 void space_validate(struct space *sp, struct tuple *old_tuple,
 		    struct tuple *new_tuple);
 void space_replace(struct space *sp, struct tuple *old_tuple,
 		   struct tuple *new_tuple);
 void space_remove(struct space *sp, struct tuple *tuple);
+void space_adjust(struct space *space, struct tuple *tuple);
 
 /** Get key_def ordinal number. */
 static inline int

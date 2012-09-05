@@ -37,10 +37,14 @@
 #include <pickle.h>
 #include <palloc.h>
 
+const char *index_type_strs[] = { "HASH", "TREE", "\0" };
+const char *field_data_type_strs[] = {"NUM", "NUM64", "STR", "\0"};
+
 struct space *spaces = NULL;
 
-bool secondary_indexes_enabled = false;
 bool primary_indexes_enabled = false;
+bool secondary_indexes_enabled = false;
+
 /** Free a key definition. */
 static void
 key_free(struct key_def *key_def)
@@ -88,10 +92,10 @@ space_validate(struct space *sp, struct tuple *old_tuple,
 
 		/* Check fixed size fields (NUM and NUM64) and skip undefined
 		   size fields (STRING and UNKNOWN). */
-		if (sp->field_types[f] == NUM) {
+		if (sp->field_desc[f].type == NUM) {
 			if (len != sizeof(u32))
 				tnt_raise(IllegalParams, :"field must be NUM");
-		} else if (sp->field_types[f] == NUM64) {
+		} else if (sp->field_desc[f].type == NUM64) {
 			if (len != sizeof(u64))
 				tnt_raise(IllegalParams, :"field must be NUM64");
 		}
@@ -105,6 +109,35 @@ space_validate(struct space *sp, struct tuple *old_tuple,
 			if (tuple != NULL && tuple != old_tuple)
 				tnt_raise(ClientError, :ER_INDEX_VIOLATION);
 		}
+	}
+}
+
+void
+space_adjust(struct space *space, struct tuple *tuple)
+{
+	int base_count = space->base_count;
+	if (base_count == 0)
+		return;
+
+	u8 *next = tuple->data;
+	for (int i = 0; i < space->max_fieldno; i++) {
+		u8 *data = next;
+		u32 len = load_varint32((void**) &next);
+		next += len;
+
+		if (space->field_desc[i].type == UNKNOWN)
+			continue;
+		if (space->field_desc[i].base == 0)
+			continue;
+		if (space->field_desc[i].disp != 0)
+			continue;
+
+		space_set_base_offset(space, tuple,
+				      space->field_desc[i].base,
+				      data - tuple->data);
+
+		if (--base_count == 0)
+			break;
 	}
 }
 
@@ -134,7 +167,7 @@ space_free(void)
 		}
 
 		free(spaces[i].key_defs);
-		free(spaces[i].field_types);
+		free(spaces[i].field_desc);
 	}
 }
 
@@ -206,14 +239,14 @@ space_init_field_types(struct space *space)
 	/* find max max field no */
 	max_fieldno = 0;
 	for (i = 0; i < key_count; i++) {
-		max_fieldno= MAX(max_fieldno, key_defs[i].max_fieldno);
+		max_fieldno = MAX(max_fieldno, key_defs[i].max_fieldno);
 	}
 
 	/* alloc & init field type info */
 	space->max_fieldno = max_fieldno;
-	space->field_types = malloc(max_fieldno * sizeof(enum field_data_type));
+	space->field_desc = malloc(max_fieldno * sizeof(struct field_desc));
 	for (i = 0; i < max_fieldno; i++) {
-		space->field_types[i] = UNKNOWN;
+		space->field_desc[i].type = UNKNOWN;
 	}
 
 	/* extract field type info */
@@ -222,7 +255,7 @@ space_init_field_types(struct space *space)
 		for (int pi = 0; pi < def->part_count; pi++) {
 			struct key_part *part = &def->parts[pi];
 			assert(part->fieldno < max_fieldno);
-			space->field_types[part->fieldno] = part->type;
+			space->field_desc[part->fieldno].type = part->type;
 		}
 	}
 
@@ -232,10 +265,52 @@ space_init_field_types(struct space *space)
 		struct key_def *def = &key_defs[i];
 		for (int pi = 0; pi < def->part_count; pi++) {
 			struct key_part *part = &def->parts[pi];
-			assert(space->field_types[part->fieldno] == part->type);
+			assert(space->field_desc[part->fieldno].type == part->type);
 		}
 	}
 #endif
+
+	/* init field offset info */
+	int current_base = 0;
+	int current_disp = 0;
+	int known_offset = 1;
+	for (i = 0; i < max_fieldno; i++) {
+		if (space->field_desc[i].type == UNKNOWN) {
+			known_offset = 0;
+			continue;
+		}
+
+		if (!known_offset) {
+			current_base = ++space->base_count;
+			current_disp = 0;
+			known_offset = 1;
+		}
+
+		space->field_desc[i].base = current_base;
+		space->field_desc[i].disp = current_disp;
+
+		fprintf(stderr, "space %d field %d base/disp: %d/%d\n",
+			space_n(space), i, current_base, current_disp);
+
+		/* On a fixed length field account for the appropriate
+		   varint length code and for the actual data length */
+		if (space->field_desc[i].type == NUM) {
+			current_disp += 1 + 4;
+		} else if (space->field_desc[i].type == NUM64) {
+			current_disp += 1 + 8;
+		} else {
+			/* TODO: check individual indexes to see if the field
+			   is a part of dense sequences in all of the indexes
+			   that include it and that for indexes that does not
+			   include it there is a later point where a new base
+			   can be made or there are no further fields at all. 
+			   In such cases a new base for the following fields
+			   is not really needed. */
+			known_offset = 0;
+		}
+	}
+
+	fprintf(stderr, "space %d base_count: %d\n", space_n(space), space->base_count);
 }
 
 static void

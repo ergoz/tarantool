@@ -30,7 +30,20 @@
  */
 #include <util.h>
 
+struct space;
 struct tbuf;
+
+/** Tuple flags used for locking. */
+enum tuple_flags {
+	/** The tuple */
+	IN_SPACE = 0x1,
+	/** Waiting on WAL write to complete. */
+	WAL_WAIT = 0x2,
+	/** A new primary key is created but not yet written to WAL. */
+	GHOST = 0x4,
+	/** Fake tuple for hash indexes. */
+	KEY_TUPLE = 0x8,
+};
 
 /**
  * An atom of Tarantool/Box storage. Consists of a list of fields.
@@ -41,7 +54,9 @@ struct tuple
 	/** reference counter */
 	u16 refs;
 	/* see enum tuple_flags */
-	u16 flags;
+	u8 flags;
+	/* space no */
+	u8 space;
 	/** length of the variable part of the tuple */
 	u32 bsize;
 	/** number of fields in the variable part. */
@@ -57,10 +72,11 @@ struct tuple
 /** Allocate a tuple
  *
  * @param size  tuple->bsize
+ * @param space the tuple space
  * @post tuple->refs = 1
  */
 struct tuple *
-tuple_alloc(size_t size);
+tuple_alloc(size_t size, struct space *spc);
 
 /**
  * Change tuple reference counter. If it has reached zero, free the tuple.
@@ -93,5 +109,6 @@ static inline size_t tuple_len(struct tuple *tuple)
 }
 
 void tuple_free(struct tuple *tuple);
+
 #endif /* TARANTOOL_BOX_TUPLE_H_INCLUDED */
 

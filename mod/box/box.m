@@ -272,11 +272,12 @@ recover_snap_row(struct tbuf *t)
 
 	struct box_snap_row *row = box_snap_row(t);
 
-	struct tuple *tuple = tuple_alloc(row->data_size);
+	struct space *space = space_find(row->space);
+	struct tuple *tuple = tuple_alloc(row->data_size, space);
 	memcpy(tuple->data, row->data, row->data_size);
 	tuple->field_count = row->tuple_size;
+	space_adjust(space, tuple);
 
-	struct space *space = space_find(row->space);
 	Index *index = space->index[0];
 	[index buildNext: tuple];
 	tuple_ref(tuple, 1);

@@ -34,50 +34,18 @@
 
 struct tuple;
 struct space;
-struct index;
+struct key_def;
 
-/*
- * Possible field data types. Can't use STRS/ENUM macros for them,
- * since there is a mismatch between enum name (STRING) and type
- * name literal ("STR"). STR is already used as Objective C type.
- */
-enum field_data_type { UNKNOWN = -1, NUM = 0, NUM64, STRING, field_data_type_MAX };
-extern const char *field_data_type_strs[];
-
-enum index_type { HASH, TREE, index_type_MAX };
-extern const char *index_type_strs[];
+/** Index search key. */
+struct index_key
+{
+       	void *data;
+	struct key_part *parts;
+	struct field_desc *part_desc;
+	u32 part_count;
+};
 
 enum iterator_type { ITER_FORWARD, ITER_REVERSE };
-
-/** Descriptor of a single part in a multipart key. */
-struct key_part {
-	int fieldno;
-	enum field_data_type type;
-};
-
-/* Descriptor of a multipart key. */
-struct key_def {
-	/* Description of parts of a multipart index. */
-	struct key_part *parts;
-	/*
-	 * An array holding field positions in 'parts' array.
-	 * Imagine there is index[1] = { key_field[0].fieldno=5,
-	 * key_field[1].fieldno=3 }.
-	 * 'parts' array for such index contains data from
-	 * key_field[0] and key_field[1] respectively.
-	 * max_fieldno is 5, and cmp_order array holds offsets of
-	 * field 3 and 5 in 'parts' array: -1, -1, 0, -1, 1.
-	 */
-	u32 *cmp_order;
-	/* The size of the 'parts' array. */
-	int part_count;
-	/*
-	 * The size of 'cmp_order' array (= max fieldno in 'parts'
-	 * array).
-	 */
-	int max_fieldno;
-	bool is_unique;
-};
 
 /** Descriptor of index features. */
 struct index_traits
@@ -85,14 +53,17 @@ struct index_traits
 	bool allows_partial_key;
 };
 
+/** Base index class */
 @interface Index: tnt_Object {
 	/* Index features. */
 	struct index_traits *traits;
  @public
 	/* Index owner space */
 	struct space *space;
+
 	/* Description of a possibly multipart key. */
 	struct key_def *key_def;
+
 	/*
 	 * Pre-allocated iterator to speed up the main case of
 	 * box_process(). Should not be used elsewhere.

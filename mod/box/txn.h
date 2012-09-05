@@ -49,14 +49,6 @@ struct txn {
 	struct tbuf req;
 };
 
-/** Tuple flags used for locking. */
-enum tuple_flags {
-	/** Waiting on WAL write to complete. */
-	WAL_WAIT = 0x1,
-	/** A new primary key is created but not yet written to WAL. */
-	GHOST = 0x2,
-};
-
 struct txn *txn_begin();
 void txn_commit(struct txn *txn);
 void txn_rollback(struct txn *txn);
