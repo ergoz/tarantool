@@ -244,6 +244,7 @@ function box.crossjoin(space0, space1, limit)
   end
   return unpack(result)
 end"""
+sql.sort = True
 exec admin "lua " + lua.replace('\n', ' ')
 exec admin "lua box.crossjoin(0, 0, 0)"
 exec admin "lua box.crossjoin(0, 0, 10000)"
@@ -256,6 +257,7 @@ exec sql "call box.crossjoin('0', '0', '10000')"
 exec admin "lua box.space[0]:insert(4, 'world')"
 exec admin "lua box.space[0]:insert(5, 'hello world')"
 exec sql "call box.crossjoin('0', '0', '10000')"
+sql.sort = False
 exec admin "lua box.space[0]:truncate()"
 exec admin "lua box.crossjoin = nil"
 print """
