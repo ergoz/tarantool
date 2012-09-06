@@ -429,6 +429,16 @@ memcached_free()
 		memcached_it->free(memcached_it);
 }
 
+static void *
+mcmalloc(size_t size)
+{
+	assert(size > 0);
+	void *p = malloc(size);
+	if (p == NULL)
+		panic("out of memory when configuring memcached_space");
+	return p;
+}
+
 void
 memcached_space_init()
 {
@@ -439,29 +449,27 @@ memcached_space_init()
 	struct space *memc_s = &spaces[cfg.memcached_space];
 	memc_s->enabled = true;
 	memc_s->arity = 4;
-
 	memc_s->key_count = 1;
-	memc_s->key_defs = malloc(sizeof(struct key_def));
+	memc_s->key_defs = mcmalloc(sizeof(struct key_def));
+	memc_s->field_desc = mcmalloc(sizeof(struct field_desc));
+	memc_s->max_fieldno = 1;
 
-	if (memc_s->key_defs == NULL)
-		panic("out of memory when configuring memcached_space");
-
-	struct key_def *key_def = memc_s->key_defs;
 	/* Configure memcached index key. */
+	struct key_def *key_def = memc_s->key_defs;
 	key_def->part_count = 1;
 	key_def->is_unique = true;
-
-	key_def->parts = malloc(sizeof(struct key_part));
-	key_def->cmp_order = malloc(sizeof(u32));
-
-	if (key_def->parts == NULL || key_def->cmp_order == NULL)
-		panic("out of memory when configuring memcached_space");
-
+	key_def->parts = mcmalloc(sizeof(struct key_part));
 	key_def->parts[0].fieldno = 0;
 	key_def->parts[0].type = STRING;
-
-	key_def->max_fieldno = 1;
+	key_def->cmp_order = mcmalloc(sizeof(u32));
 	key_def->cmp_order[0] = 0;
+	key_def->max_fieldno = 1;
+
+	/* Configure memcached field description. */
+	struct field_desc *field_desc = memc_s->field_desc;
+	field_desc->type = STRING;
+	field_desc->base = 0;
+	field_desc->disp = 0;
 
 	/* Configure memcached index. */
 	Index *memc_index = memc_s->index[0] = [Index alloc: HASH :key_def :memc_s];
