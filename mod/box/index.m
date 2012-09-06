@@ -58,19 +58,6 @@ iterator_first_equal(struct iterator *it)
 	return it->next(it);
 }
 
-static void
-check_key_parts(struct key_def *key_def,
-		int part_count, bool partial_key_allowed)
-{
-	if (part_count > key_def->part_count)
-		tnt_raise(ClientError, :ER_KEY_PART_COUNT,
-			  part_count, key_def->part_count);
-	if (!partial_key_allowed && part_count < key_def->part_count)
-		tnt_raise(ClientError, :ER_EXACT_MATCH,
-			  part_count, key_def->part_count);
-
-}
-
 /* {{{ Index -- base class for all indexes. ********************/
 
 @interface HashIndex: Index {
@@ -170,7 +157,7 @@ check_key_parts(struct key_def *key_def,
 
 - (struct tuple *) findByKey: (void *) key :(int) part_count
 {
-	check_key_parts(key_def, part_count, false);
+	space_check_key(self, key, part_count, false);
 	return [self findUnsafe: key :part_count];
 }
 
@@ -219,7 +206,7 @@ check_key_parts(struct key_def *key_def,
 - (void) initIteratorByKey: (struct iterator *) iterator :(enum iterator_type) type
                         :(void *) key :(int) part_count
 {
-	check_key_parts(key_def, part_count, traits->allows_partial_key);
+	space_check_key(self, key, part_count, traits->allows_partial_key);
 	[self initIteratorUnsafe: iterator :type :key :part_count];
 }
 
@@ -311,32 +298,6 @@ set_hash_data(struct index_key *index_key, Index *index, struct tuple *tuple)
 		index_key->part_count = index->key_def->part_count;
 		index_key->part_desc = index->space->field_desc;
 		index_key->parts = index->key_def->parts;
-	}
-}
-
-static void
-check_tuple(HashIndex *index, struct tuple *tuple)
-{
-	struct index_key index_key;
-	set_hash_data(&index_key, index, tuple);
-
-	for (int part = 0; part < index_key.part_count; part++) {
-		int field = index_key.parts[part].fieldno;
-		u8 *data = index_key.data + index_key.part_desc[field].disp;
-		if (index_key.part_desc[field].base) {
-			assert((tuple->flags & IN_SPACE) != 0);
-			assert((tuple->flags & KEY_TUPLE) == 0);
-			data += space_get_base_offset(index->space, tuple,
-						      index_key.part_desc[field].base);
-		}
-		u32 len = load_varint32((void**) &data);
-		if (index_key.part_desc[field].type == NUM) {
-			if (len != 4)
-				tnt_raise(ClientError, :ER_KEY_FIELD_TYPE, "u32");
-		} else if (index_key.part_desc[field].type == NUM64) {
-			if (len != 8)
-				tnt_raise(ClientError, :ER_KEY_FIELD_TYPE, "u64");
-		}
 	}
 }
 
@@ -531,7 +492,6 @@ hash_iterator_free(struct iterator *iterator)
 - (struct tuple *) findUnsafe: (void *) key :(int) part_count
 {
 	set_key_tuple_data(key_tuple, key, part_count);
-	check_tuple(self, key_tuple);
 	mh_int_t k = mh_tuple_table_get(hash, key_tuple);
 	struct tuple *ret = NULL;
 	if (k != mh_end(hash))
@@ -541,7 +501,6 @@ hash_iterator_free(struct iterator *iterator)
 
 - (struct tuple *) findByTuple: (struct tuple *) tuple
 {
-	check_tuple(self, tuple);
 	mh_int_t k = mh_tuple_table_get(hash, tuple);
 	struct tuple *ret = NULL;
 	if (k != mh_end(hash))
@@ -551,7 +510,6 @@ hash_iterator_free(struct iterator *iterator)
 
 - (void) remove: (struct tuple *) tuple
 {
-	check_tuple(self, tuple);
 	mh_int_t k = mh_tuple_table_get(hash, tuple);
 	if (k != mh_end(hash))
 		mh_tuple_table_del(hash, k);
@@ -561,7 +519,6 @@ hash_iterator_free(struct iterator *iterator)
 	:(struct tuple *) new_tuple
 {
 	if (old_tuple != NULL) {
-		check_tuple(self, old_tuple);
 		mh_int_t k = mh_tuple_table_get(hash, old_tuple);
 		if (k != mh_end(hash))
 			mh_tuple_table_del(hash, k);
@@ -595,7 +552,6 @@ hash_iterator_free(struct iterator *iterator)
 	it->base.next_equal = iterator_first_equal;
 
 	set_key_tuple_data(key_tuple, key, part_count);
-	check_tuple(self, key_tuple);
 	it->h_pos = mh_tuple_table_get(hash, key_tuple);
 
 	it->hash = hash;

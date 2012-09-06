@@ -64,46 +64,81 @@ space_replace(struct space *sp, struct tuple *old_tuple,
 	}
 }
 
+/**
+ * Check the key for validness.
+ */
 void
-space_validate(struct space *sp, struct tuple *old_tuple,
-	       struct tuple *new_tuple)
+space_check_key(Index *index, void *key, int part_count,
+		bool partial_key_allowed)
 {
-	int n = index_count(sp);
+	struct key_def *key_def = index->key_def;
 
-	/* Only secondary indexes are validated here. So check to see
-	   if there are any.*/
-	if (n <= 1) {
-		return;
+	/* Check to see if the key has a valid number of parts. */
+	if (part_count > key_def->part_count)
+		tnt_raise(ClientError, :ER_KEY_PART_COUNT,
+			  part_count, key_def->part_count);
+	if (!partial_key_allowed && part_count < key_def->part_count)
+		tnt_raise(ClientError, :ER_EXACT_MATCH,
+			  part_count, key_def->part_count);
+
+	/* Sweep through the key and check the field sizes. */
+	for (int part = 0; part < part_count; part++) {
+		u32 len = load_varint32((void**) &key);
+		key += len;
+
+		if (key_def->parts[part].type == NUM) {
+			if (len != 4)
+				tnt_raise(ClientError, :ER_KEY_FIELD_TYPE, "u32");
+		} else if (key_def->parts[part].type == NUM64) {
+			if (len != 8)
+				tnt_raise(ClientError, :ER_KEY_FIELD_TYPE, "u64");
+		}
 	}
+}
 
-	/* Check to see if the tuple has a sufficient number of fields. */
-	if (new_tuple->field_count < sp->max_fieldno)
+/**
+ * Check the tuple to see if it has the required fields.
+ */
+void
+space_check_tuple(struct space *space, struct tuple *tuple)
+{
+	/* Check to see if the tuple has a valid number of fields. */
+	if (tuple->field_count < space->max_fieldno)
 		tnt_raise(IllegalParams, :"tuple must have all indexed fields");
-
-	if (sp->arity > 0 && sp->arity != new_tuple->field_count)
+	if (space->arity > 0 && space->arity != tuple->field_count)
 		tnt_raise(IllegalParams, :"tuple field count must match space cardinality");
 
 	/* Sweep through the tuple and check the field sizes. */
-	u8 *data = new_tuple->data;
-	for (int f = 0; f < sp->max_fieldno; ++f) {
+	u8 *data = tuple->data;
+	for (int field = 0; field < space->max_fieldno; ++field) {
 		/* Get the size of the current field and advance. */
 		u32 len = load_varint32((void **) &data);
 		data += len;
 
 		/* Check fixed size fields (NUM and NUM64) and skip undefined
 		   size fields (STRING and UNKNOWN). */
-		if (sp->field_desc[f].type == NUM) {
+		if (space->field_desc[field].type == NUM) {
 			if (len != sizeof(u32))
-				tnt_raise(IllegalParams, :"field must be NUM");
-		} else if (sp->field_desc[f].type == NUM64) {
+				tnt_raise(ClientError, :ER_KEY_FIELD_TYPE, "u32");
+		} else if (space->field_desc[field].type == NUM64) {
 			if (len != sizeof(u64))
-				tnt_raise(IllegalParams, :"field must be NUM64");
+				tnt_raise(ClientError, :ER_KEY_FIELD_TYPE, "u64");
 		}
 	}
+}
 
-	/* Check key uniqueness */
+/**
+ * Check the tuple against the constraints (so far only uniqueness).
+ */
+void
+space_check_constraints(struct space *space, struct tuple *old_tuple,
+			struct tuple *new_tuple)
+{
+	int n = index_count(space);
+
+	/* Check key uniqueness. Only secondary indexes are validated here. */
 	for (int i = 1; i < n; ++i) {
-		Index *index = sp->index[i];
+		Index *index = space->index[i];
 		if (index->key_def->is_unique) {
 			struct tuple *tuple = [index findByTuple: new_tuple];
 			if (tuple != NULL && tuple != old_tuple)

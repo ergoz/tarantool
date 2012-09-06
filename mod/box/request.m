@@ -85,13 +85,13 @@ port_send_tuple(u32 flags, Port *port, struct tuple *tuple)
 - (void) execute: (struct txn *) txn :(Port *) port
 {
 	txn_add_redo(txn, type, data);
+
 	struct space *sp = read_space(data);
 	u32 flags = read_u32(data) & BOX_ALLOWED_REQUEST_FLAGS;
 	size_t field_count = read_u32(data);
 
 	if (field_count == 0)
 		tnt_raise(IllegalParams, :"tuple field count is 0");
-
 	if (data->size == 0 || data->size != valid_tuple(data, field_count))
 		tnt_raise(IllegalParams, :"incorrect tuple length");
 
@@ -100,16 +100,17 @@ port_send_tuple(u32 flags, Port *port, struct tuple *tuple)
 	txn->new_tuple->field_count = field_count;
 	memcpy(txn->new_tuple->data, data->data, data->size);
 
+	space_check_tuple(sp, txn->new_tuple);
+	space_adjust(sp, txn->new_tuple);
+
 	struct tuple *old_tuple = [sp->index[0] findByTuple: txn->new_tuple];
 
 	if (flags & BOX_ADD && old_tuple != NULL)
 		tnt_raise(ClientError, :ER_TUPLE_FOUND);
-
 	if (flags & BOX_REPLACE && old_tuple == NULL)
 		tnt_raise(ClientError, :ER_TUPLE_NOT_FOUND);
 
-	space_validate(sp, old_tuple, txn->new_tuple);
-	space_adjust(sp, txn->new_tuple);
+	space_check_constraints(sp, old_tuple, txn->new_tuple);
 
 	txn_add_undo(txn, sp, old_tuple, txn->new_tuple);
 
@@ -732,8 +733,10 @@ update_read_ops(struct tbuf *data, u32 op_cnt)
 		txn->new_tuple = tuple_alloc(new_tuple_len, sp);
 		tuple_ref(txn->new_tuple, 1);
 		do_update_ops(rope, txn->new_tuple);
-		space_validate(sp, old_tuple, txn->new_tuple);
+
+		space_check_tuple(sp, txn->new_tuple);
 		space_adjust(sp, txn->new_tuple);
+		space_check_constraints(sp, old_tuple, txn->new_tuple);
 	}
 	txn_add_undo(txn, sp, old_tuple, txn->new_tuple);
 	port_send_tuple(flags, port, txn->new_tuple);

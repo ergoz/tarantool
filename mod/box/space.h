@@ -174,12 +174,17 @@ space_set_base_offset(struct space *space, struct tuple *tuple, int index, u32 v
 	((u32 *) tuple)[-index] = value;
 }
 
-void space_validate(struct space *sp, struct tuple *old_tuple,
-		    struct tuple *new_tuple);
+void space_check_key(Index *index, void *key, int part_count,
+		     bool partial_key_allowed);
+void space_check_tuple(struct space *space, struct tuple *tuple);
+void space_check_constraints(struct space *space, struct tuple *old_tuple,
+			     struct tuple *new_tuple);
+
+void space_adjust(struct space *space, struct tuple *tuple);
+
 void space_replace(struct space *sp, struct tuple *old_tuple,
 		   struct tuple *new_tuple);
 void space_remove(struct space *sp, struct tuple *tuple);
-void space_adjust(struct space *space, struct tuple *tuple);
 
 /** Get key_def ordinal number. */
 static inline int
