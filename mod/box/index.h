@@ -36,15 +36,6 @@ struct tuple;
 struct space;
 struct key_def;
 
-/** Index search key. */
-struct index_key
-{
-       	void *data;
-	struct key_part *parts;
-	struct field_desc *part_desc;
-	u32 part_count;
-};
-
 enum iterator_type { ITER_FORWARD, ITER_REVERSE };
 
 /** Descriptor of index features. */
@@ -69,6 +60,9 @@ struct index_traits
 	 * box_process(). Should not be used elsewhere.
 	 */
 	struct iterator *position;
+
+	struct key_part *parts;
+	struct field_desc *field_desc;
 };
 
 /**

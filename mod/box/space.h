@@ -161,7 +161,7 @@ space_tuple_overhead(struct space *space)
 }
 
 static inline u32
-space_get_base_offset(struct space *space, struct tuple *tuple, int index)
+space_get_base_offset(struct space *space, const struct tuple *tuple, int index)
 {
 	assert(index > 0 && index <= space->base_count);
 	return ((u32 *) tuple)[-index];
