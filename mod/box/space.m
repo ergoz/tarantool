@@ -396,9 +396,34 @@ space_init_key_info(struct space *space)
 
 	/*
 	 * Gather individual key info.
+	 *
+	 * Check to See if the key field access requires temporary offset
+	 * table. This is the case for keys with non-linear field order.
 	 */
+
 	for (int k = 0; k < space->key_count; k++) {
 		struct key_def *d = &space->key_defs[k];
+
+		bool needs_offset_table = false;
+		for (int p = 0; p < d->part_count; p++) {
+			int f = d->parts[p].fieldno;
+			if (space->field_desc[f].base >= 0) {
+				continue;
+			}
+
+			if (p == 0) {
+				needs_offset_table = true;
+				break;
+			}
+
+			int prev_f = d->parts[p - 1].fieldno;
+			if ((prev_f + 1) != f) {
+				needs_offset_table = true;
+				break;
+			}
+		}
+
+		d->needs_offset_table = needs_offset_table;
 	}
 }
 

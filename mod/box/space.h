@@ -93,6 +93,13 @@ struct key_def {
 	int max_fieldno;
 
 	bool is_unique;
+
+	/**
+	 * The flag indicating that field access requires temporary
+	 * offset table. This is the case for keys with non-linear
+	 * field order.
+	 */
+	bool needs_offset_table;
 };
 
 struct space {
