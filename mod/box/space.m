@@ -254,6 +254,7 @@ key_init(struct key_def *def, struct tarantool_cfg_space_index *cfg_index)
 		/* fill compare order */
 		def->cmp_order[cfg_key->fieldno] = k;
 	}
+
 	def->is_unique = cfg_index->unique;
 }
 
@@ -261,8 +262,6 @@ key_init(struct key_def *def, struct tarantool_cfg_space_index *cfg_index)
  * Extract all available field info from keys
  *
  * @param space		space to extract field info for
- * @param key_count	the number of keys
- * @param key_defs	key description array
  */
 static void
 space_init_field_types(struct space *space)
@@ -304,48 +303,103 @@ space_init_field_types(struct space *space)
 		}
 	}
 #endif
+}
 
-	/* init field offset info */
+/**
+ * Build the info required to use keys with space tuples.
+ *
+ * @param space		space to build the info for
+ */
+static void
+space_init_key_info(struct space *space)
+{
+	/* 
+	 * Gather agregate key info.
+	 *
+	 * For every field that is a part of any key in the space fugure
+	 * out and record how it can be accessed efficiently that is
+	 * without scanning over fields not used in the index.
+	 */
+
+	/* The first field of the tuple always has known offset of 0 from
+	   the start of the tuple. */
+	int known_offset = 1;
 	int current_base = 0;
 	int current_disp = 0;
-	int known_offset = 1;
-	for (i = 0; i < max_fieldno; i++) {
-		if (space->field_desc[i].type == UNKNOWN) {
-			known_offset = 0;
+
+	for(int f = 0; f < space->max_fieldno; ++f) {
+
+		/* A field with unknown type is not a part of any of the
+		   keys. So we do not need to record how to access such
+		   a field. And as its length is not known in advance it
+		   makes the offsets of the following fields unknown too. */
+		if (space->field_desc[f].type == UNKNOWN) {
+ 			known_offset = 0;
 			continue;
 		}
 
+		/* Determine if the field offset can be found from already
+		   known fields, if not allocate a base offset slot for it. */
 		if (!known_offset) {
-			current_base = ++space->base_count;
-			current_disp = 0;
-			known_offset = 1;
+			/* Check to see if the field for every key that
+			   contains it is adjacent to another field in
+			   the same key. */
+			int adjacent = 1;
+			if (f > 0) {
+				for (int k = 0; k < space->key_count; k++) {
+					struct key_def *d = &space->key_defs[k];
+					if (f < d->max_fieldno
+					    && d->cmp_order[f] != -1
+					    && d->cmp_order[f - 1] == -1) {
+						adjacent = 0;
+						break;
+					}
+				}
+			}
+			/* Allocate a new base offset slot if needed. */
+			if (!adjacent) {
+				current_base = ++space->base_count;
+				current_disp = 0;
+				known_offset = 1;
+			}
 		}
 
-		space->field_desc[i].base = current_base;
-		space->field_desc[i].disp = current_disp;
-
-		fprintf(stderr, "space %d field %d base/disp: %d/%d\n",
-			space_n(space), i, current_base, current_disp);
-
-		/* On a fixed length field account for the appropriate
-		   varint length code and for the actual data length */
-		if (space->field_desc[i].type == NUM) {
-			current_disp += 1 + 4;
-		} else if (space->field_desc[i].type == NUM64) {
-			current_disp += 1 + 8;
+		/* Record how the field is going to be accessed. */
+		if (!known_offset) {
+			/* Using previous field offset and length. */
+			space->field_desc[f].base = -1;
+			space->field_desc[f].disp = 0;
 		} else {
-			/* TODO: check individual indexes to see if the field
-			   is a part of dense sequences in all of the indexes
-			   that include it and that for indexes that does not
-			   include it there is a later point where a new base
-			   can be made or there are no further fields at all. 
-			   In such cases a new base for the following fields
-			   is not really needed. */
-			known_offset = 0;
+			/* Using base offset and displacement. */
+			space->field_desc[f].base = current_base;
+			space->field_desc[f].disp = current_disp;
+
+			/* For a fixed length field account for
+			   the appropriate varint length code and
+			   for the actual data length. */
+			if (space->field_desc[f].type == NUM) {
+				current_disp += 1 + 4;
+			} else if (space->field_desc[f].type == NUM64) {
+				current_disp += 1 + 8;
+			} else {
+				known_offset = 0;
+			}
 		}
+
+		say_info("space %d field %d base/disp: %d/%d",
+			 space_n(space), f,
+			 space->field_desc[f].base, space->field_desc[f].disp);
 	}
 
-	fprintf(stderr, "space %d base_count: %d\n", space_n(space), space->base_count);
+	say_info("space %d tuple base count: %d",
+		 space_n(space), space->base_count);
+
+	/*
+	 * Gather individual key info.
+	 */
+	for (int k = 0; k < space->key_count; k++) {
+		struct key_def *d = &space->key_defs[k];
+	}
 }
 
 static void
@@ -383,11 +437,14 @@ space_config()
 		if (spaces[i].key_defs == NULL) {
 			panic("can't allocate key def array");
 		}
+
 		for (int j = 0; cfg_space->index[j] != NULL; ++j) {
 			typeof(cfg_space->index[j]) cfg_index = cfg_space->index[j];
 			key_init(&spaces[i].key_defs[j], cfg_index);
 		}
+
 		space_init_field_types(&spaces[i]);
+		space_init_key_info(&spaces[i]);
 
 		/* fill space indexes */
 		for (int j = 0; cfg_space->index[j] != NULL; ++j) {
