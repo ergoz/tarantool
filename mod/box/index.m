@@ -206,6 +206,54 @@ index_search_set_tuple_data(struct index_search_data *data,
 }
 
 static void
+index_search_init_offsets(u32 *offset_table,
+			  struct index_search_helper *helper,
+			  const struct tuple *tuple)
+{
+	if (offset_table == NULL)
+		return;
+
+	struct space *space = helper->index->space;
+	struct key_def *def = helper->index->key_def;
+	for (int f = 0; f < def->max_fieldno; f++) {
+		int p = def->cmp_order[f];
+		if (p == -1)
+			continue;
+
+		if (space->field_desc[f].base >= 0) {
+			u32 offset = space->field_desc[f].disp;
+			if (space->field_desc[f].base > 0) {
+				offset += space_get_base_offset(
+					space, tuple,
+					space->field_desc[f].base);
+			}
+			offset_table[p] = offset;
+			continue;
+		}
+
+		u32 offset = 0;
+		int prev_f = f - 1;
+		assert(prev_f >= 0);
+		if (space->field_desc[prev_f].base >= 0) {
+			offset = space->field_desc[prev_f].disp;
+			if (space->field_desc[prev_f].base > 0) {
+				offset += space_get_base_offset(
+					space, tuple,
+					space->field_desc[prev_f].base);
+			}
+		} else {
+			int prev_p = def->cmp_order[prev_f];
+			assert(prev_p >= 0);
+			offset = offset_table[prev_p];
+		}
+
+		const u8 *data = tuple->data + offset;
+	        u32 size = load_varint32((void**) &data);
+		offset_table[p] = data - tuple->data + size;
+	}
+}
+
+static void
 index_search_init_a(struct index_search_data *data,
 		    struct index_search_helper *helper,
 		    const struct tuple *tuple)
@@ -217,6 +265,8 @@ index_search_init_a(struct index_search_data *data,
 	} else {
 		index_search_set_tuple_data(data, helper, tuple);
 		data->offset_table = helper->offset_table_a;
+		index_search_init_offsets(data->offset_table,
+					  helper, tuple);
 	}
 }
 
@@ -227,6 +277,8 @@ index_search_init_b(struct index_search_data *data,
 {
 	index_search_set_tuple_data(data, helper, tuple);
 	data->offset_table = helper->offset_table_b;
+	index_search_init_offsets(data->offset_table,
+				  helper, tuple);
 }
 
 static void
@@ -372,17 +424,6 @@ SPTREE_DEF(index, realloc);
 
 @implementation Index
 
-static void
-index_adjust_key(Index *index, const void *key, int part_count)
-{
-	const u8 *data = key;
-	for (int field = 1; field < part_count; field++) {
-		u32 len = load_varint32((void **) &data);
-		data += len;
-		index->field_desc[field].disp = data - ((u8 *) key);
-	}
-}
-
 + (struct index_traits *) traits
 {
 	return &index_traits;
@@ -429,7 +470,7 @@ index_adjust_key(Index *index, const void *key, int part_count)
 			parts[i].fieldno = i;
 
 			field_desc[i].type = key_def->parts[i].type;
-			field_desc[i].base = 0;
+			field_desc[i].base = -1;
 			field_desc[i].disp = 0;
 		}
 	}
@@ -671,7 +712,6 @@ hash_iterator_free(struct iterator *iterator)
 - (struct tuple *) findUnsafe: (void *) key :(int) part_count
 {
 	INDEX_KEY_SEARCH_DEFINE(helper, self, key, part_count);
-	index_adjust_key(self, key, part_count);
 
 	mh_int_t k = mh_tuple_table_get(&helper, &hash, NULL);
 	struct tuple *ret = NULL;
@@ -747,7 +787,6 @@ hash_iterator_free(struct iterator *iterator)
 	it->base.next_equal = iterator_first_equal;
 
 	INDEX_KEY_SEARCH_DEFINE(helper, self, key, part_count);
-	index_adjust_key(self, key, part_count);
 
 	it->h_pos = mh_tuple_table_get(&helper, &hash, NULL);
 	it->index = self;
@@ -834,7 +873,6 @@ tree_iterator_next_equal(struct iterator *iterator)
 	struct tuple **tuplep = sptree_index_iterator_next(it->iter);
 	if (tuplep != NULL) {
 		INDEX_KEY_SEARCH_DEFINE(helper, it->index, it->key, it->part_count);
-		index_adjust_key(it->index, it->key, it->part_count);
 
 		if (it->index->tree.compare(NULL, tuplep, &helper) == 0) {
 			return *tuplep;
@@ -851,7 +889,6 @@ tree_iterator_reverse_next_equal(struct iterator *iterator)
 	struct tuple **tuplep = sptree_index_iterator_reverse_next(it->iter);
 	if (tuplep != NULL) {
 		INDEX_KEY_SEARCH_DEFINE(helper, it->index, it->key, it->part_count);
-		index_adjust_key(it->index, it->key, it->part_count);
 
 		if (it->index->tree.compare(NULL, tuplep, &helper) == 0) {
 			return *tuplep;
@@ -906,7 +943,6 @@ tree_iterator_free(struct iterator *iterator)
 - (struct tuple *) findUnsafe: (void *) key : (int) part_count
 {
 	INDEX_KEY_SEARCH_DEFINE(helper, self, key, part_count);
-	index_adjust_key(self, key, part_count);
 
 	struct tuple **tuplep = sptree_index_find(&tree, NULL, &helper);
 	return tuplep != NULL ? *tuplep : NULL;
@@ -976,7 +1012,6 @@ tree_iterator_free(struct iterator *iterator)
 	struct tree_iterator *it = tree_iterator(iterator);
 
 	INDEX_KEY_SEARCH_DEFINE(helper, self, key, part_count);
-	index_adjust_key(self, key, part_count);
 
 	it->key = key;
 	it->part_count = part_count;

@@ -162,7 +162,7 @@ space_adjust(struct space *space, struct tuple *tuple)
 
 		if (space->field_desc[i].type == UNKNOWN)
 			continue;
-		if (space->field_desc[i].base == 0)
+		if (space->field_desc[i].base <= 0)
 			continue;
 		if (space->field_desc[i].disp != 0)
 			continue;
