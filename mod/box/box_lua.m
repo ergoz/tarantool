@@ -46,7 +46,7 @@
 #include "tuple.h"
 #include "space.h"
 #include "port.h"
-
+#include "box_lua_uuid.h"
 
 /* contents of box.lua */
 extern const char box_lua[];
@@ -56,7 +56,7 @@ extern const char box_lua[];
  * Lua coroutines (lua_newthread()) to have multiple
  * procedures running at the same time.
  */
-lua_State *root_L;
+static lua_State *root_L;
 
 /*
  * Functions, exported in box_lua.h should have prefix
@@ -346,8 +346,8 @@ lbox_tuple_find_do(struct lua_State *L, bool all)
 	default:
 		luaL_error(L, "tuple.find(): bad arguments");
 	}
-	size_t key_size;
-	const char *key;
+	size_t key_size = 0;
+	const char *key = NULL;
 	u32 u32v;
 	u64 u64v;
 	switch (lua_type(L, argc)) {
@@ -899,7 +899,11 @@ static const struct luaL_reg lbox_iterator_meta[] = {
 
 - (void) addTuple: (struct tuple *) tuple
 {
-	lbox_pushtuple(L, tuple);
+	@try {
+		lbox_pushtuple(L, tuple);
+	} @catch (...) {
+		tnt_raise(ClientError, :ER_PROC_LUA, lua_tostring(L, -1));
+	}
 }
 
 @end
@@ -937,9 +941,9 @@ static int lbox_process(lua_State *L)
 	}
 	int top = lua_gettop(L); /* to know how much is added by rw_callback */
 
+	size_t allocated_size = palloc_allocated(fiber->gc_pool);
 	struct txn *txn = txn_begin();
 	Port *port_lua = [[PortLua alloc] init: L];
-	size_t allocated_size = palloc_allocated(fiber->gc_pool);
 	@try {
 		box_process(txn, port_lua, op, &req);
 	} @finally {
@@ -954,6 +958,8 @@ static int lbox_process(lua_State *L)
 
 static const struct luaL_reg boxlib[] = {
 	{"process", lbox_process},
+	{"uuid", lbox_uuid},
+	{"uuid_hex", lbox_uuid_hex},
 	{NULL, NULL}
 };
 
@@ -1034,7 +1040,7 @@ void box_lua_find(lua_State *L, const char *name, const char *name_end)
 }
 @end
 
-struct lua_State *
+void
 mod_lua_init(struct lua_State *L)
 {
 	/* box, box.tuple */
@@ -1049,12 +1055,8 @@ mod_lua_init(struct lua_State *L)
 	/* Load box.lua */
 	if (luaL_dostring(L, box_lua))
 		panic("Error loading box.lua: %s", lua_tostring(L, -1));
+
 	assert(lua_gettop(L) == 0);
-	return L;
-}
 
-void box_lua_init()
-{
-	root_L = tarantool_L;
+	root_L = L;
 }
-

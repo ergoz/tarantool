@@ -352,15 +352,25 @@ eof:
 	if (ftello(l->f) == i->good_offset + sizeof(eof_marker_v11)) {
 		fseeko(l->f, i->good_offset, SEEK_SET);
 		if (fread(&magic, sizeof(magic), 1, l->f) != 1) {
+
 			say_error("can't read eof marker");
-		}
-		else if (magic != eof_marker_v11) {
-			say_error("eof marker is corrupt: %lu",
-				  (unsigned long) magic);
-		}
-		else {
+		} else if (magic == eof_marker_v11) {
 			i->good_offset = ftello(l->f);
 			i->eof_read = true;
+		} else if (magic != row_marker_v11) {
+			say_error("eof marker is corrupt: %lu",
+				  (unsigned long) magic);
+		} else {
+			/*
+			 * Row marker at the end of a file: a sign
+			 * of a corrupt log file in case of
+			 * recovery, but OK in case we're in local
+			 * hot standby or replication relay mode
+			 * (i.e. data is being written to the
+			 * file. Don't pollute the log, the
+			 * condition is taken care of up the
+			 * stack.
+			 */
 		}
 	}
 	/* No more rows. */

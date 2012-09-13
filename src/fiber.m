@@ -63,10 +63,13 @@
 #define FIBER_CALL_STACK 16
 
 static struct fiber sched;
-struct fiber *fiber = &sched;
-static struct fiber **sp, *call_stack[FIBER_CALL_STACK];
-static uint32_t last_used_fid;
-static struct palloc_pool *ex_pool;
+__thread struct fiber *fiber = &sched;
+static __thread struct fiber *call_stack[FIBER_CALL_STACK];
+static __thread struct fiber **sp;
+static __thread uint32_t last_used_fid;
+static __thread struct palloc_pool *ex_pool;
+static __thread struct mh_i32ptr_t *fibers_registry;
+__thread SLIST_HEAD(, fiber) fibers, zombie_fibers;
 
 struct fiber_cleanup {
 	void (*handler) (void *data);
@@ -79,8 +82,6 @@ struct fiber_server {
 	void (*handler) (void *data);
 	void (*on_bind) (void *data);
 };
-
-static struct mh_i32ptr_t *fibers_registry;
 
 static void
 update_last_stack_frame(struct fiber *fiber)
@@ -126,7 +127,7 @@ fiber_wakeup(struct fiber *f)
  * Note: this is not guaranteed to succeed, and requires a level
  * of cooperation on behalf of the fiber. A fiber may opt to set
  * FIBER_CANCELLABLE to false, and never test that it was
- * cancelled.  Such fiber we won't be ever to cancel, ever, and
+ * cancelled.  Such fiber can not ever be cancelled, and
  * for such fiber this call will lead to an infinite wait.
  * However, fiber_testcancel() is embedded to the rest of fiber_*
  * API (@sa fiber_yield()), which makes most of the fibers that opt in,
@@ -202,7 +203,6 @@ fiber_testcancel(void)
 /** Change the current cancellation state of a fiber. This is not
  * a cancellation point.
  */
-
 void fiber_setcancelstate(bool enable)
 {
 	if (enable == true)
@@ -216,7 +216,6 @@ void fiber_setcancelstate(bool enable)
  * but it is considered good practice to call testcancel()
  * after each yield.
  */
-
 void
 fiber_yield(void)
 {
@@ -454,6 +453,7 @@ fiber_set_name(struct fiber *fiber, const char *name)
 {
 	assert(name != NULL);
 	snprintf(fiber->name, sizeof(fiber->name), "%s", name);
+	palloc_set_name(fiber->gc_pool, fiber->name);
 }
 
 /* fiber never dies, just become zombie */
@@ -495,7 +495,6 @@ fiber_create(const char *name, int fd, void (*f) (void *), void *f_data)
 	fiber->flags = 0;
 	fiber->waiter = NULL;
 	fiber_set_name(fiber, name);
-	palloc_set_name(fiber->gc_pool, fiber->name);
 	register_fid(fiber);
 
 	return fiber;
@@ -997,8 +996,8 @@ fiber_init(void)
 
 	memset(&sched, 0, sizeof(sched));
 	sched.fid = 1;
+	sched.gc_pool = palloc_create_pool("");
 	fiber_set_name(&sched, "sched");
-	sched.gc_pool = palloc_create_pool(sched.name);
 
 	sp = call_stack;
 	fiber = &sched;

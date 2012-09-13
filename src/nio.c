@@ -34,6 +34,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
+#include <errno.h>
 
 #include <say.h>
 #include <nio.h>
@@ -135,16 +136,25 @@ nlseek(int fd, off_t offset, int whence)
 	off_t effective_offset = lseek(fd, offset, whence);
 
 	if (effective_offset == -1) {
-		say_syserror("lseek, offset=%jd, whence=%d, [%s]",
-			     (intmax_t) offset, whence,
-			     nfilename(fd));
+		say_syserror("lseek, [%s]: offset=%jd, whence=%d",
+			     nfilename(fd), (intmax_t) offset, whence);
 	} else if (whence == SEEK_SET && effective_offset != offset) {
-		say_error("lseek, offset set to unexpected value: "
-			  "requested %jd effective %jd, "
-			  "[%s]",
-			  (intmax_t)offset, (intmax_t)effective_offset, nfilename(fd));
+		say_error("lseek, [%s]: offset set to unexpected value: "
+			  "requested %jd effective %jd",
+			  nfilename(fd),
+			  (intmax_t)offset, (intmax_t)effective_offset);
 	}
 	return effective_offset;
+}
+
+int
+nftruncate(int fd, off_t offset)
+{
+	int rc = ftruncate(fd, offset);
+	if (rc)
+		say_syserror("ftruncate, [%s]: offset=%jd",
+			     nfilename(fd), (intmax_t) offset);
+	return rc;
 }
 
 struct nbatch *
@@ -189,6 +199,11 @@ nbatch_write(struct nbatch *batch, int fd)
 	if (bytes_written == batch->bytes)
 		return batch->rows;
 
+	say_warn("nbatch_write, [%s]: partial write,"
+		 " wrote %jd out of %jd bytes",
+		 nfilename(fd),
+		 (intmax_t) bytes_written, (intmax_t) batch->bytes);
+
 	ssize_t good_bytes = 0;
 	struct iovec *iov = batch->iov;
 	while (iov < batch->iov + batch->rows) {
@@ -201,6 +216,20 @@ nbatch_write(struct nbatch *batch, int fd)
 	 * Unwind file position back to ensure we do not leave
 	 * partially written rows.
 	 */
-	nlseek(fd, good_bytes - bytes_written, SEEK_CUR);
+	off_t good_offset = nlseek(fd, good_bytes - bytes_written, SEEK_CUR);
+	/*
+	 * The caller may choose to close the file right after
+	 * a partial write. Don't take chances and make sure that
+	 * there is no garbage at the end of file if it happens.
+	 */
+	if (good_offset != -1)
+		(void) nftruncate(fd, good_offset);
+	/*
+	 * writev() doesn't set errno in case of a partial write.
+	 * If nothing else from the above failed, set errno to
+	 * EAGAIN.
+	 */
+	if (! errno)
+		errno = EAGAIN;
 	return iov - batch->iov;
 }

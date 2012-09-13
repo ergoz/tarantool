@@ -73,6 +73,49 @@ static const char *unknown_command = "unknown command. try typing help." CRLF;
 	write data;
 }%%
 
+struct salloc_stat_admin_cb_ctx {
+	i64 total_used;
+	struct tbuf *out;
+};
+
+static int
+salloc_stat_admin_cb(const struct slab_class_stats *cstat, void *cb_ctx)
+{
+	struct salloc_stat_admin_cb_ctx *ctx = cb_ctx;
+
+	tbuf_printf(ctx->out,
+		    "     - { item_size: %- 5i, slabs: %- 3i, items: %- 11" PRIi64
+		    ", bytes_used: %- 12" PRIi64
+		    ", bytes_free: %- 12" PRIi64 " }" CRLF,
+		    (int)cstat->item_size,
+		    (int)cstat->slabs,
+		    cstat->items,
+		    cstat->bytes_used,
+		    cstat->bytes_free);
+
+	ctx->total_used += cstat->bytes_used;
+	return 0;
+}
+
+static void
+show_slab(struct tbuf *out)
+{
+	struct salloc_stat_admin_cb_ctx cb_ctx;
+	struct slab_arena_stats astat;
+
+	cb_ctx.total_used = 0;
+	cb_ctx.out = out;
+
+	tbuf_printf(out, "slab statistics:\n  classes:" CRLF);
+
+	salloc_stat(salloc_stat_admin_cb, &astat, &cb_ctx);
+
+	tbuf_printf(out, "  items_used: %.2f%%" CRLF,
+		(double)cb_ctx.total_used / astat.size * 100);
+	tbuf_printf(out, "  arena_used: %.2f%%" CRLF,
+		(double)astat.used / astat.size * 100);
+}
+
 
 static void
 end(struct tbuf *out)
@@ -123,6 +166,24 @@ tarantool_info(struct tbuf *out)
 	if (path == NULL)
 		path = cfg_filename;
 	tbuf_printf(out, "  config: \"%s\"" CRLF, path);
+}
+
+static int
+show_stat_item(const char *name, int rps, i64 total, void *ctx)
+{
+	struct tbuf *buf = ctx;
+	int name_len = strlen(name);
+	tbuf_printf(buf,
+		    "  %s:%*s{ rps: %- 6i, total: %- 12" PRIi64 " }" CRLF,
+		    name, 1 + stat_max_name_len - name_len, " ", rps, total);
+	return 0;
+}
+
+void
+show_stat(struct tbuf *buf)
+{
+	tbuf_printf(buf, "statistics:" CRLF);
+	stat_foreach(show_stat_item, buf);
 }
 
 static int
@@ -246,9 +307,9 @@ admin_dispatch(lua_State *L)
 			    show " "+ info		%{start(out); tarantool_info(out); end(out);}	|
 			    show " "+ fiber		%{start(out); fiber_info(out); end(out);}	|
 			    show " "+ configuration 	%show_configuration				|
-			    show " "+ slab		%{start(out); slab_stat(out); end(out);}	|
+			    show " "+ slab		%{start(out); show_slab(out); end(out);}	|
 			    show " "+ palloc		%{start(out); palloc_stat(out); end(out);}	|
-			    show " "+ stat		%{start(out); stat_print(out);end(out);}	|
+			    show " "+ stat		%{start(out); show_stat(out);end(out);}		|
 			    show " "+ injections	%show_injections                                |
 			    set " "+ injection " "+ name " "+ state	%set_injection                  |
 			    save " "+ coredump		%{coredump(60); ok(out);}			|
@@ -277,8 +338,6 @@ admin_handler(void *data __attribute__((unused)))
 {
 	lua_State *L = lua_newthread(tarantool_L);
 	int coro_ref = luaL_ref(tarantool_L, LUA_REGISTRYINDEX);
-	/** Allow to interrupt/kill administrative connections. */
-	fiber_setcancelstate(true);
 	@try {
 		for (;;) {
 			if (admin_dispatch(L) <= 0)

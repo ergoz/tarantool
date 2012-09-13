@@ -86,9 +86,12 @@ function is_expired(args, tuple)
    local tuple_ts = box.unpack("i", field)
    return current_time >= tuple_ts + args.ttl
 end
+function purge(args, tuple)
+    box.space[0]:delete(tuple[0])
+end
 
 -- Run task
-expirationd.run_task("exprd space 0", 0, is_expired, nil,
+expirationd.run_task("exprd space 0", 0, is_expired, purge,
                     { field_no = 1, ttl = 30 * 60 })
 ]]>
     </programlisting>
@@ -724,6 +727,108 @@ lua box.dostring('local f = function(key) t=box.select(0, 0, key); if t ~= nil t
 ...
 </programlisting>
             </para>
+        </listitem>
+    </varlistentry>
+    <varlistentry>
+        <term>
+            <emphasis role="lua">box.uuid()</emphasis>
+        </term>
+        <listitem>
+            <para>
+                Generate 128-bit (16 bytes) unique id. The id
+                is returned in binary form.
+            </para>
+            <para>
+                Requires <emphasis>libuuid</emphasis> library to be
+                installed. The library is loaded in runtime,
+                and if the library is not available, this
+                function returns an error.
+            </para>
+        </listitem>
+    </varlistentry>
+    <varlistentry>
+        <term>
+            <emphasis role="lua">box.uuid_hex()</emphasis>
+        </term>
+        <listitem>
+            <para>
+                Generate hex-string of 128-bit (16 bytes) unique id.
+                Return 32-bytes string.
+            </para>
+            <bridgehead renderas="sect4">Example</bridgehead>
+            <programlisting>
+                lua box.uuid_hex()
+                ---
+                 - a4f29fa0eb6d11e19f7737696d7fa8ff
+                ...
+            </programlisting>
+        </listitem>
+    </varlistentry>
+    <varlistentry>
+        <term>
+            <emphasis role="lua">box.auto_increment(space_no, ...)</emphasis>
+        </term>
+        <listitem>
+            <para>
+                Insert values into space designated by space_no, using
+                an auto-increment primary key. The space must have a
+                NUM or NUM64 primary key index of type TREE.
+            </para>
+            <bridgehead renderas="sect4">Example</bridgehead>
+            <programlisting>localhost> lua box.auto_increment(0, "I am a duplicate")
+---
+ - 1: {'I am a duplicate'}
+...
+localhost> lua box.auto_increment(2, "I am a duplicate")
+---
+ - 2: {'I am a duplicate'}
+...
+            </programlisting>
+        </listitem>
+    </varlistentry>
+    <varlistentry>
+        <term>
+            <emphasis role="lua">box.counter.inc(space_no, key)</emphasis>
+        </term>
+        <listitem>
+            <para>
+                Increments a counter identified by the key. The key can be
+                multi-part, but there must be an index covering
+                all fields of the key. If there is no tuple
+                identified by the given key, creates a new one
+                with initial counter value set to 1.  Returns the
+                new counter value back.
+            </para>
+            <bridgehead renderas="sect4">Example</bridgehead>
+            <programlisting>localhost> lua box.counter.inc(0, 'top.mail.ru')
+---
+ - 1
+...
+localhost> lua box.counter.inc(0, 'top.mail.ru')
+---
+ - 2
+...</programlisting>
+        </listitem>
+    </varlistentry>
+    <varlistentry>
+        <term>
+            <emphasis role="lua">box.counter.dec(space_no, key)</emphasis>
+        </term>
+        <listitem>
+            <para>
+                Decrements a counter identified by the given key. If
+                the key is not found, is a no-op. When counter value
+                drops to 0, the tuple is deleted.
+            </para>
+            <bridgehead renderas="sect4">Example</bridgehead>
+            <programlisting>localhost> lua box.counter.dec(0, 'top.mail.ru')
+---
+ - 1
+...
+localhost> lua box.counter.dec(0, 'top.mail.ru')
+---
+ - 0
+...</programlisting>
         </listitem>
     </varlistentry>
 </variablelist>
@@ -1402,6 +1507,172 @@ slab_alloc_minimal = 64
 admin_port = 33015
 logger = cat - >> tarantool.log
 ...
+</programlisting></listitem>
+    </varlistentry>
+</variablelist>
+<variablelist>
+    <title>Package <code>box.info</code></title>
+    <para>
+        This package provides access to information about
+        server variables: pid, uptime, version and such.
+        Its contents is identical to output of <olink
+        targetptr="show-info"/>.
+    </para>
+    <varlistentry>
+        <term>
+            <emphasis role="lua">box.info()</emphasis>
+        </term>
+        <listitem>
+            <simpara>
+            Since contents of box.info is dynamic, it's
+            not possible to iterate over keys with Lua <emphasis>pairs()</emphasis>
+            function. For this purpose, <emphasis>box.info()</emphasis> builds
+            and returns a Lua table with all keys and values
+            provided in the package.
+            </simpara>
+
+       <bridgehead renderas="sect4">Example</bridgehead><programlisting>
+localhost> lua for k,v in pairs(box.info()) do print(k, ": ", v) end
+---
+version: 1.4.7-92-g4ba95ca
+status: primary
+pid: 1747
+lsn: 1712
+recovery_last_update: 1306964594.980
+recovery_lag: 0.000
+uptime: 39
+build: table: 0x419cb880
+logger_pid: 1748
+config: /home/unera/work/tarantool/test/box/tarantool_good.cfg
+...
+</programlisting>
+        </listitem>
+    </varlistentry>
+    <varlistentry>
+        <term>
+            <emphasis role="lua">box.info.status, box.info.pid, box.info.lsn, ...</emphasis>
+        </term>
+        <listitem>
+       <bridgehead renderas="sect4">Example</bridgehead><programlisting>
+localhost> lua box.info.pid
+---
+ - 1747
+...
+localhost> lua box.info.logger_pid
+---
+ - 1748
+...
+localhost> lua box.info.version
+---
+ - 1.4.7-92-g4ba95ca
+...
+localhost> lua box.info.config
+---
+ - /home/unera/work/tarantool/test/box/tarantool_good.cfg
+...
+localhost> lua box.info.uptime
+---
+ - 3672
+...
+localhost> lua box.info.lsn
+---
+ - 1712
+...
+localhost> lua box.info.status
+---
+ - primary
+...
+localhost> lua box.info.recovery_lag
+---
+ - 0.000
+...
+localhost> lua box.info.recovery_last_update
+---
+ - 1306964594.980
+...
+localhost> lua for k, v in pairs(box.info.build) do print(k .. ': ', v) end
+---
+flags:  -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -DCORO_ASM -fno-omit-frame-pointer -fno-stack-protector -fexceptions -funwind-tables -fgnu89-inline -pthread  -Wno-sign-compare -Wno-strict-aliasing -std=gnu99 -Wall -Wextra -Werror
+target: Linux-x86_64-Debug
+compiler: /usr/bin/gcc
+options: cmake . -DCMAKE_INSTALL_PREFIX=/usr/local -DENABLE_STATIC=OFF -DENABLE_GCOV=OFF -DENABLE_TRACE=ON -DENABLE_BACKTRACE=ON -DENABLE_CLIENT=OFF
+...
+</programlisting>
+        </listitem>
+    </varlistentry>
+</variablelist>
+
+<variablelist>
+    <title>Package <code>box.slab</code></title>
+    <para>This package provides access to slab allocator statistics.</para>
+    <varlistentry>
+        <term><emphasis role="lua">box.slab</emphasis></term>
+        <listitem><bridgehead renderas="sect4">Example</bridgehead><programlisting>
+localhost> lua box.slab.arena_used
+---
+ - 4194304
+...
+localhost> lua box.slab.arena_size
+---
+ - 104857600
+...
+localhost> lua for k, v in pairs(box.slab.slabs) do print(k) end
+---
+64
+128
+...
+localhost> lua for k, v in pairs(box.slab.slabs[64]) do print(k, ':', v) end
+---
+items:1
+bytes_used:160
+item_size:64
+slabs:1
+bytes_free:4194144
+...
+</programlisting></listitem>
+    </varlistentry>
+</variablelist>
+
+<variablelist>
+    <title>Package <code>box.stat</code></title>
+    <para>This package provides access to request
+    statistics.</para>
+    <varlistentry>
+        <term><emphasis role="lua">box.stat</emphasis></term>
+        <listitem><bridgehead renderas="sect4">Example</bridgehead><programlisting>
+localhost> lua box.stat -- a virtual table
+---
+ - table: 0x41a07a08
+...
+localhost> lua box.stat() -- a full table (the same)
+---
+ - table: 0x41a0ebb0
+...
+localhost> lua for k, v in pairs(box.stat()) do print(k) end
+---
+DELETE
+SELECT
+REPLACE
+CALL
+UPDATE
+DELETE_1_3
+...
+localhost> lua for k, v in pairs(box.stat().DELETE) do print(k, ': ', v) end
+---
+total: 23210
+rps: 22
+...
+localhost> lua for k, v in pairs(box.stat.DELETE) do print(k, ': ', v) end -- the same
+---
+total: 23210
+rps: 22
+...
+localhost> lua for k, v in pairs(box.stat.SELECT) do print(k, ': ', v) end
+---
+total: 34553330
+rps: 23
+...
+localhost>
 </programlisting></listitem>
     </varlistentry>
 </variablelist>

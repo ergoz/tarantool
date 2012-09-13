@@ -39,6 +39,25 @@ void salloc_destroy(void);
 void *salloc(size_t size, const char *what);
 void sfree(void *ptr);
 void slab_validate();
-void slab_stat(struct tbuf *buf);
-void slab_stat2(u64 *bytes_used, u64 *items);
+
+/** Statistics on utilization of a single slab class. */
+struct slab_class_stats {
+	i64 item_size;
+	i64 slabs;
+	i64 items;
+	i64 bytes_used;
+	i64 bytes_free;
+};
+
+/** Statistics on utilization of the slab allocator. */
+struct slab_arena_stats {
+	size_t size;
+	size_t used;
+};
+
+typedef int (*salloc_stat_cb)(const struct slab_class_stats *st, void *ctx);
+
+int
+salloc_stat(salloc_stat_cb cb, struct slab_arena_stats *astat, void *cb_ctx);
+
 #endif /* TARANTOOL_SALLOC_H_INCLUDED */
