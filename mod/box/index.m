@@ -762,7 +762,7 @@ hash_iterator_free(struct iterator *iterator)
 	mh_int_t pos = mh_tuple_table_put(&helper, &hash, new_tuple, NULL);
 	if (pos == mh_end(&hash))
 		tnt_raise(LoggedError, :ER_MEMORY_ISSUE, (ssize_t) pos,
-			  "int hash", "key");
+			  "hash", "key");
 }
 
 - (void) initIterator: (struct iterator *) iterator :(enum iterator_type) type
