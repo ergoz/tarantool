@@ -167,7 +167,7 @@ space_adjust(struct space *space, struct tuple *tuple)
 		if (space->field_desc[i].disp != 0)
 			continue;
 
-		space_set_base_offset(space, tuple,
+		space_set_base_offset(tuple,
 				      space->field_desc[i].base,
 				      data - tuple->data);
 

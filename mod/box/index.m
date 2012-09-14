@@ -224,7 +224,7 @@ index_search_init_offsets(u32 *offset_table,
 			u32 offset = space->field_desc[f].disp;
 			if (space->field_desc[f].base > 0) {
 				offset += space_get_base_offset(
-					space, tuple,
+					tuple,
 					space->field_desc[f].base);
 			}
 			offset_table[p] = offset;
@@ -238,7 +238,7 @@ index_search_init_offsets(u32 *offset_table,
 			offset = space->field_desc[prev_f].disp;
 			if (space->field_desc[prev_f].base > 0) {
 				offset += space_get_base_offset(
-					space, tuple,
+					tuple,
 					space->field_desc[prev_f].base);
 			}
 		} else {
@@ -282,9 +282,7 @@ index_search_init_b(struct index_search_data *data,
 }
 
 static void
-index_search_load_data(struct index_search_data *data,
-		       struct index_search_helper *helper,
-		       int part)
+index_search_load_data(struct index_search_data *data, int part)
 {
 	if (unlikely(data->offset_table != NULL)) {
 		data->field_data = data->data + data->offset_table[part];
@@ -297,7 +295,6 @@ index_search_load_data(struct index_search_data *data,
 				+ data->field_desc[field].disp;
 			if (data->field_desc[field].base > 0) {
 				data->field_data += space_get_base_offset(
-					helper->index->space,
 					data->tuple,
 					data->field_desc[field].base);
 			}
@@ -317,7 +314,7 @@ index_search_hash(struct index_search_helper *helper,
 
 	uint32_t h = 13;
 	for (int part = 0; part < d.part_count; part++) {
-		index_search_load_data(&d, helper, part);
+		index_search_load_data(&d, part);
 		h = MurmurHash2(d.field_data, d.field_size, h);
 	}
 	return h;
@@ -337,8 +334,8 @@ index_search_equal(struct index_search_helper *helper,
 		return 0;
 
 	for (int part = 0; part < da.part_count; part++) {
-		index_search_load_data(&da, helper, part);
-		index_search_load_data(&db, helper, part);
+		index_search_load_data(&da, part);
+		index_search_load_data(&db, part);
 		if (da.field_size != db.field_size)
 			return 0;
 		if (memcmp(da.field_data, db.field_data, da.field_size) != 0)
@@ -360,8 +357,8 @@ index_search_compare(struct index_search_helper *helper,
 
 	int part_count = MIN(da.part_count, db.part_count);
 	for (int part = 0; part < part_count; part++) {
-		index_search_load_data(&da, helper, part);
-		index_search_load_data(&db, helper, part);
+		index_search_load_data(&da, part);
+		index_search_load_data(&db, part);
 
 		int cmp;
 		int field = helper->index->key_def->parts[part].fieldno;

@@ -29,6 +29,7 @@
  * SUCH DAMAGE.
  */
 #include "index.h"
+#include "tuple.h"
 #include <exception.h>
 
 struct tarantool_cfg;
@@ -168,16 +169,18 @@ space_tuple_overhead(struct space *space)
 }
 
 static inline u32
-space_get_base_offset(struct space *space, const struct tuple *tuple, int index)
+space_get_base_offset(const struct tuple *tuple, int index)
 {
-	assert(index > 0 && index <= space->base_count);
+	assert((tuple->flags & IN_SPACE) != 0);
+	assert(index > 0 && index <= spaces[tuple->space].base_count);
 	return ((u32 *) tuple)[-index];
 }
 
 static inline void
-space_set_base_offset(struct space *space, struct tuple *tuple, int index, u32 value)
+space_set_base_offset(struct tuple *tuple, int index, u32 value)
 {
-	assert(index > 0 && index <= space->base_count);
+	assert((tuple->flags & IN_SPACE) != 0);
+	assert(index > 0 && index <= spaces[tuple->space].base_count);
 	((u32 *) tuple)[-index] = value;
 }
 
