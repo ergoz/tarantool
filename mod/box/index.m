@@ -827,6 +827,30 @@ tree_iterator(struct iterator *it)
 	return (struct tree_iterator *) it;
 }
 
+static void
+tree_iterator_set_key(struct tree_iterator *it,
+		      void *key, int part_count)
+{
+	/* Find the key size. */
+	u8 *data = key;
+	for (int part = 0; part < part_count; part++) {
+		u32 size = load_varint32((void**) &data);
+		data += size;
+	}
+	u32 key_size = data - (u8 *) key;
+
+	/* Copy the key data, */
+	if (key_size > 0) {
+		it->key = malloc(key_size);
+		if (it->key == NULL)
+			tnt_raise(LoggedError, :ER_MEMORY_ISSUE, key_size,
+				  "tree index", "key");
+
+		memcpy(it->key, key, key_size);
+		it->part_count = part_count;
+	}
+}
+
 @implementation TreeIndex
 
 static int
@@ -908,7 +932,8 @@ tree_iterator_free(struct iterator *iterator)
 	struct tree_iterator *it = tree_iterator(iterator);
 	if (it->iter)
 		sptree_index_iterator_free(it->iter);
-
+	if (it->key != NULL)
+		free(it->key);
 	free(it);
 }
 
@@ -957,7 +982,7 @@ tree_iterator_free(struct iterator *iterator)
 	assert((tuple->flags & IN_SPACE) != 0);
 
 	INDEX_SEARCH_DEFINE(helper, self);
-\
+
 	struct tuple **tuplep = sptree_index_find(&tree, &tuple, &helper);
 	return tuplep != NULL ? *tuplep : NULL;
 }
@@ -1016,9 +1041,8 @@ tree_iterator_free(struct iterator *iterator)
 	struct tree_iterator *it = tree_iterator(iterator);
 
 	INDEX_KEY_SEARCH_DEFINE(helper, self, key, part_count);
+	tree_iterator_set_key(it, key, part_count);
 
-	it->key = key;
-	it->part_count = part_count;
 	if (type == ITER_FORWARD) {
 		it->base.next = tree_iterator_next;
 		it->base.next_equal = tree_iterator_next_equal;
