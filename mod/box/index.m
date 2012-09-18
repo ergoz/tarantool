@@ -95,7 +95,56 @@ iterator_first_equal(struct iterator *it)
 
 /* }}} */
 
-/* {{{ Search helper. *********************************************/
+/* {{{ Index search routines. *************************************/
+
+@class BaseIndex;
+
+/* Pseudo tuples. */
+#define SEARCH_KEY	((struct tuple *) 257)
+#define SEARCH_TUPLE	((struct tuple *) 259)
+
+#define IS_PSEUDO_TUPLE(t) ((void *) (t) <= (void *) SEARCH_TUPLE)
+
+/**
+ * The data relevant to the search request over a given index. It consists
+ * of the specific key data accompanied by the pertinent metadata. The key
+ * data goes either from a tuple or from a genuine externally supplied key.
+ *
+ * The location if key parts within the "data" area differs in these two
+ * cases. The metadata fields define the actual location of the key parts.
+ */
+struct search_data
+{
+	/* The entire key data. */
+       	const void *data;
+
+	/* Description of the key. */
+	struct key_part *parts;
+	struct field_desc *field_desc;
+
+	/* The tuple the key data goes from. May be NULL if the data goes
+	   from a genuine key. The tuple is needed to access its base offset
+	   table. */
+	const struct tuple *tuple;
+
+	/* The offset data needed for non-linear field access. */
+	u32 *offset_table;
+};
+
+/**
+ * Current field data (for iteration over search_data).
+ */
+struct search_part_data
+{
+	u32 size;
+	const u8 *data;
+	const u8 *next;
+};
+
+#define DEFINE_PART_DATA(v, search_data_p)				\
+	struct search_part_data v = { .size = 0,			\
+				      .data = NULL,			\
+				      .next = (search_data_p)->data }
 
 /**
  * Helper struct to pass additional info to functions that perform
@@ -104,113 +153,106 @@ iterator_first_equal(struct iterator *it)
  * The "index" field is always set to the Index instance the search
  * is performed on.
  *
- * The "key_data" and "part_count" fields are set when comparison or
+ * The "data" and "part_count" fields are set when comparison or
  * hashing is to be done against a key rather than a tuple.
  */
-struct index_search_helper
+struct search_helper
 {
-	Index *index;
-	u8 *data;
-	u32 *offset_table_a;
-	u32 *offset_table_b;
-	int part_count;
+	/* The index the search is done on. */
+	BaseIndex *index;
+
+	/* The number of key parts. */
+	u32 part_count;
+
+	/* Comparison left-hand data. */
+	struct search_data a;
+	/* Comparison right-hand data. */
+	struct search_data b;
 };
 
-/* Tuple search initializer. */
-#define INDEX_SEARCH_HELPER(idx)				\
-	(struct index_search_helper) {				\
-		.index = (idx),					\
-		.data = NULL, .part_count = -1,			\
-		.offset_table_a = NULL, .offset_table_b = NULL	\
+@interface BaseIndex: Index
+{
+@public
+	/* Metadata for keys. */
+	struct key_part *key_parts;
+	struct field_desc *key_field_desc;
+
+	/* Search helper utilized for index maintenance
+	   rather than tuple lookup. */
+	struct search_helper common_helper;
+}
+@end
+
+/* Key search initializer. */
+#define KEY_SEARCH_HELPER(idx, cnt)					\
+	(struct search_helper) {					\
+		.index = (idx),						\
+		.part_count = MIN((cnt), (idx)->key_def->part_count),	\
 	}
 
-/* Key search Initializer. */
-#define INDEX_KEY_SEARCH_HELPER(idx, key, cnt)			\
-	(struct index_search_helper) {				\
-		.index = (idx),					\
-		.data = (key),.part_count = (cnt),		\
-		.offset_table_a = NULL, .offset_table_b = NULL	\
+/* Tuple search initializer. */
+#define SEARCH_HELPER(idx)						\
+	(struct search_helper) {					\
+		.index = (idx),						\
+		.part_count = (idx)->key_def->part_count,		\
 	}
 
 /* Offset table initializer. */
-#define INDEX_SEARCH_OFFSET_TABLE(idx)				\
-	((idx)->key_def->needs_offset_table			\
-	 ? alloca(idx->key_def->part_count * sizeof(uint32_t))	\
+#define SEARCH_OFFSET_TABLE(idx)					\
+	((idx)->key_def->needs_offset_table				\
+	 ? alloca((idx)->key_def->part_count * sizeof(uint32_t))	\
 	 : NULL)
 
-#define INDEX_SEARCH_DEFINE(var, idx)				\
-	struct index_search_helper var =			\
-		INDEX_SEARCH_HELPER(idx);			\
-	var.offset_table_a = INDEX_SEARCH_OFFSET_TABLE(idx);	\
-	var.offset_table_b = INDEX_SEARCH_OFFSET_TABLE(idx);
+#define DEFINE_KEY_SEARCH_DATA(v, idx, key, cnt)			\
+	struct search_helper v = KEY_SEARCH_HELPER(idx, cnt);		\
+	v.a.offset_table = NULL;					\
+	v.b.offset_table = SEARCH_OFFSET_TABLE(idx);			\
+	search_set_key(&v.b, &v, key);					\
+	search_set_tuple_meta(&v.b, &v);
 
-#define INDEX_KEY_SEARCH_DEFINE(var, idx, key, cnt)		\
-	struct index_search_helper var =			\
-		INDEX_KEY_SEARCH_HELPER(idx, key, cnt);		\
-	var.offset_table_a = NULL;				\
-	var.offset_table_b = INDEX_SEARCH_OFFSET_TABLE(idx);
+#define DEFINE_SEARCH_DATA(v, idx, tuple)				\
+	struct search_helper v = SEARCH_HELPER(idx);			\
+	v.a.offset_table = SEARCH_OFFSET_TABLE(idx);			\
+	v.b.offset_table = SEARCH_OFFSET_TABLE(idx);			\
+	search_set_tuple_meta(&v.a, &v);				\
+	search_set_tuple_data(&v.a, &v, tuple);				\
+	search_set_tuple_meta(&v.b, &v);
 
-/**
- * The key data accompanied by the required metadata. The key data goes
- * either from a tuple or from an externally supplied key.
- *
- * The location if key parts within the "data" area differs in these two
- * cases. The metadata fields define the actual location of the key parts.
- */
-struct index_search_data
-{
-	struct key_part *parts;
-	struct field_desc *field_desc;
-       	const void *data;
-	u32 *offset_table;
-	u32 part_count;
-	
-	const struct tuple *tuple;
-
-	u32 field_size;
-	const u8 *field_data;
-	const u8 *field_next;
-};
+#define DEFINE_SEARCH_DATA_NOTUPLE(v, idx)				\
+	struct search_helper v = SEARCH_HELPER(idx);			\
+	v.a.offset_table = SEARCH_OFFSET_TABLE(idx);			\
+	v.b.offset_table = SEARCH_OFFSET_TABLE(idx);			\
+	search_set_tuple_meta(&v.a, &v);				\
+	search_set_tuple_meta(&v.b, &v);
 
 static void
-index_search_set_key_data(struct index_search_data *data,
-			  struct index_search_helper *helper)
+search_set_key(struct search_data *data,
+	       struct search_helper *helper,
+	       const void *key)
 {
-	data->data = helper->data;
-	data->part_count = helper->part_count;
-	data->field_desc = helper->index->field_desc;
-	data->parts = helper->index->parts;
-
-	data->tuple = 0;
-
-	data->field_size = 0;
-	data->field_data = NULL;
-	data->field_next = data->data;
+	data->data = key;
+	data->field_desc = helper->index->key_field_desc;
+	data->parts = helper->index->key_parts;
+	data->tuple = NULL;
 }
 
 static void
-index_search_set_tuple_data(struct index_search_data *data,
-			    struct index_search_helper *helper,
-			    const struct tuple *tuple)
+search_set_tuple_meta(struct search_data *data,
+			  struct search_helper *helper)
 {
-	data->data = tuple->data;
-	data->part_count = helper->index->key_def->part_count;
 	data->field_desc = helper->index->space->field_desc;
 	data->parts = helper->index->key_def->parts;
-
-	data->tuple = tuple;
-
-	data->field_size = 0;
-	data->field_data = NULL;
-	data->field_next = data->data;
 }
 
 static void
-index_search_init_offsets(u32 *offset_table,
-			  struct index_search_helper *helper,
-			  const struct tuple *tuple)
+search_set_tuple_data(struct search_data *data,
+		      struct search_helper *helper,
+		      const struct tuple *tuple)
 {
-	if (offset_table == NULL)
+	data->data = tuple->data;
+	data->tuple = tuple;
+
+	if (data->offset_table == NULL)
 		return;
 
 	struct space *space = helper->index->space;
@@ -227,7 +269,7 @@ index_search_init_offsets(u32 *offset_table,
 					tuple,
 					space->field_desc[f].base);
 			}
-			offset_table[p] = offset;
+			data->offset_table[p] = offset;
 			continue;
 		}
 
@@ -244,101 +286,102 @@ index_search_init_offsets(u32 *offset_table,
 		} else {
 			int prev_p = def->cmp_order[prev_f];
 			assert(prev_p >= 0);
-			offset = offset_table[prev_p];
+			offset = data->offset_table[prev_p];
 		}
 
-		const u8 *data = tuple->data + offset;
-	        u32 size = load_varint32((void**) &data);
-		offset_table[p] = data - tuple->data + size;
+		const u8 *ptr = tuple->data + offset;
+	        u32 size = load_varint32((void**) &ptr);
+		data->offset_table[p] = ptr - tuple->data + size;
 	}
 }
 
-static void
-index_search_init_a(struct index_search_data *data,
-		    struct index_search_helper *helper,
-		    const struct tuple *tuple)
+static inline const u8 *
+search_get_part(struct search_part_data *part_data,
+		struct search_data *data, int part)
 {
-	if (helper->part_count >= 0) {
-		assert(tuple == NULL);
-		index_search_set_key_data(data, helper);
-		data->offset_table = NULL;
-	} else {
-		index_search_set_tuple_data(data, helper, tuple);
-		data->offset_table = helper->offset_table_a;
-		index_search_init_offsets(data->offset_table,
-					  helper, tuple);
-	}
-}
-
-static void
-index_search_init_b(struct index_search_data *data,
-		     struct index_search_helper *helper,
-		     const struct tuple *tuple)
-{
-	index_search_set_tuple_data(data, helper, tuple);
-	data->offset_table = helper->offset_table_b;
-	index_search_init_offsets(data->offset_table,
-				  helper, tuple);
-}
-
-static void
-index_search_load_data(struct index_search_data *data, int part)
-{
+	const u8 *ptr;
 	if (unlikely(data->offset_table != NULL)) {
-		data->field_data = data->data + data->offset_table[part];
+		ptr = data->data + data->offset_table[part];
 	} else {
 		int field = data->parts[part].fieldno;
-		if (unlikely(data->field_desc[field].base < 0)) {
-			data->field_data = data->field_next;
+		int base = data->field_desc[field].base;
+		if (unlikely(base < 0)) {
+			ptr = part_data->next;
 		} else {
-			data->field_data = data->data
-				+ data->field_desc[field].disp;
-			if (data->field_desc[field].base > 0) {
-				data->field_data += space_get_base_offset(
-					data->tuple,
-					data->field_desc[field].base);
-			}
+			ptr = data->data + data->field_desc[field].disp;
+			if (base > 0)
+				ptr += space_get_base_offset(data->tuple, base);
 		}
 	}
+	return ptr;
+}
 
-	data->field_size = load_varint32((void**) &data->field_data);
-	data->field_next = data->field_data + data->field_size;
+static inline void
+search_load_part(struct search_part_data *part_data,
+		 struct search_data *data, int part)
+{
+	const u8 *ptr = search_get_part(part_data, data, part);
+	part_data->size = load_varint32((void**) &ptr);
+	part_data->next = ptr + part_data->size;
+	part_data->data = ptr;
+}
+
+static inline u32
+search_load_n32_part(struct search_part_data *part_data,
+		     struct search_data *data, int part)
+{
+	const u8 *ptr = search_get_part(part_data, data, part);
+	part_data->next = ptr + 5;
+	return *((u32 *) (ptr + 1));
+}
+
+static inline u64
+search_load_n64_part(struct search_part_data *part_data,
+		     struct search_data *data, int part)
+{
+	const u8 *ptr = search_get_part(part_data, data, part);
+	part_data->next = ptr + 9;
+	return *((u64 *) (ptr + 1));
 }
 
 static uint32_t
-index_search_hash(struct index_search_helper *helper,
-		  const struct tuple *tuple)
+search_hash(struct search_helper *x, const struct tuple *tuple)
 {
-	struct index_search_data d;
-	index_search_init_a(&d, helper, tuple);
+	if (!IS_PSEUDO_TUPLE(tuple)) {
+		x = &x->index->common_helper;
+		search_set_tuple_data(&x->a, x, tuple);
+	}
+
+	DEFINE_PART_DATA(a, &x->a);
 
 	uint32_t h = 13;
-	for (int part = 0; part < d.part_count; part++) {
-		index_search_load_data(&d, part);
-		h = MurmurHash2(d.field_data, d.field_size, h);
+	for (int part = 0; part < x->part_count; part++) {
+		search_load_part(&a, &x->a, part);
+		h = MurmurHash2(a.data, a.size, h);
 	}
 	return h;
 }
 
 static int
-index_search_equal(struct index_search_helper *helper,
-		   const struct tuple *tuple_a,
-		   const struct tuple *tuple_b)
+search_equal(struct search_helper *x,
+	     const struct tuple *tuple_a,
+	     const struct tuple *tuple_b)
 {
-	struct index_search_data da;
-	struct index_search_data db;
-	index_search_init_a(&da, helper, tuple_a);
-	index_search_init_b(&db, helper, tuple_b);
+	if (!IS_PSEUDO_TUPLE(tuple_a)) {
+		x = &x->index->common_helper;
+		search_set_tuple_data(&x->a, x, tuple_a);
+	}
+	search_set_tuple_data(&x->b, x, tuple_b);
 
-	if (da.part_count != db.part_count)
-		return 0;
+	DEFINE_PART_DATA(a, &x->a);
+	DEFINE_PART_DATA(b, &x->b);
 
-	for (int part = 0; part < da.part_count; part++) {
-		index_search_load_data(&da, part);
-		index_search_load_data(&db, part);
-		if (da.field_size != db.field_size)
+	for (int part = 0; part < x->part_count; part++) {
+		search_load_part(&a, &x->a, part);
+		search_load_part(&b, &x->b, part);
+		if (a.size != b.size)
 			return 0;
-		if (memcmp(da.field_data, db.field_data, da.field_size) != 0)
+		if (memcmp(a.data, b.data, a.size) != 0)
 			return 0;
 	}
 
@@ -346,36 +389,40 @@ index_search_equal(struct index_search_helper *helper,
 }
 
 static int
-index_search_compare(struct index_search_helper *helper,
-		     const struct tuple *tuple_a,
-		     const struct tuple *tuple_b)
+search_compare(struct search_helper *x,
+	       const struct tuple *tuple_a,
+	       const struct tuple *tuple_b)
 {
-	struct index_search_data da;
-	struct index_search_data db;
-	index_search_init_a(&da, helper, tuple_a);
-	index_search_init_b(&db, helper, tuple_b);
+	if (!IS_PSEUDO_TUPLE(tuple_a)) {
+		x = &x->index->common_helper;
+		search_set_tuple_data(&x->a, x, tuple_a);
+	}
+	search_set_tuple_data(&x->b, x, tuple_b);
 
-	int part_count = MIN(da.part_count, db.part_count);
-	for (int part = 0; part < part_count; part++) {
-		index_search_load_data(&da, part);
-		index_search_load_data(&db, part);
+	DEFINE_PART_DATA(a, &x->a);
+	DEFINE_PART_DATA(b, &x->b);
 
+	for (int part = 0; part < x->part_count; part++) {
 		int cmp;
-		int field = helper->index->key_def->parts[part].fieldno;
-		if (da.field_desc[field].type == NUM) {
-			cmp = u32_cmp(*((u32 *) da.field_data),
-				      *((u32 *) db.field_data));
-		} else if (da.field_desc[field].type == NUM64) {
-			cmp = u64_cmp(*((u64 *) da.field_data),
-				      *((u64 *) db.field_data));
+
+		int field = x->a.parts[part].fieldno;
+		if (x->a.field_desc[field].type == NUM) {
+			u32 a32 = search_load_n32_part(&a, &x->a, part);
+			u32 b32 = search_load_n32_part(&b, &x->b, part);
+			cmp = u32_cmp(a32, b32);
+		} else if (x->a.field_desc[field].type == NUM64) {
+			u64 a64 = search_load_n64_part(&a, &x->a, part);
+			u64 b64 = search_load_n64_part(&b, &x->b, part);
+			cmp = u64_cmp(a64, b64);
 		} else {
-			cmp = memcmp(da.field_data, db.field_data,
-				     MIN(da.field_size, db.field_size));
+			search_load_part(&a, &x->a, part);
+			search_load_part(&b, &x->b, part);
+			cmp = memcmp(a.data, b.data, MIN(a.size, b.size));
 			if (cmp == 0) {
-				cmp = ((int) da.field_size)
-					- ((int) db.field_size);
+				cmp = ((int) a.size) - ((int) b.size);
 			}
 		}
+
 		if (cmp) {
 			return cmp;
 		}
@@ -392,10 +439,10 @@ index_search_compare(struct index_search_helper *helper,
  * Instantiate hash table definitions.
  */
 #define mh_name _tuple_table
-#define mh_arg_t struct index_search_helper *
+#define mh_arg_t struct search_helper *
 #define mh_val_t struct tuple *
-#define mh_hash(x, k) index_search_hash((x), (k))
-#define mh_eq(x, ka, kb) index_search_equal((x), (ka), (kb))
+#define mh_hash(x, k) search_hash((x), (k))
+#define mh_eq(x, ka, kb) search_equal((x), (ka), (kb))
 #define MH_SOURCE 1
 #include <mhash-val.h>
 
@@ -404,20 +451,20 @@ index_search_compare(struct index_search_helper *helper,
  */
 SPTREE_DEF(index, realloc);
 
-@interface HashIndex: Index {
+@interface HashIndex: BaseIndex {
 	struct mh_tuple_table_t hash;
 }
 - (void) reserve: (u32) n_tuples;
 @end
 
-@interface TreeIndex: Index {
+@interface TreeIndex: BaseIndex {
 	sptree_index tree;
 };
 @end
 
 /* }}} */
 
-/* {{{ Index -- base class for all indexes. ***********************/
+/* {{{ Index -- abstract index class. *****************************/
 
 @implementation Index
 
@@ -452,24 +499,6 @@ SPTREE_DEF(index, realloc);
 		key_def = key_def_arg;
 		space = space_arg;
 		position = [self allocIterator];
-
-		parts = malloc(sizeof(struct key_part) * key_def->part_count);
-		if (parts == NULL)
-			abort();
-
-		field_desc = malloc(sizeof(struct field_desc)
-				    * key_def->part_count);
-		if (field_desc == NULL)
-			abort();
-
-		for (int i = 0; i < key_def->part_count; i++) {
-			parts[i].type = key_def->parts[i].type;
-			parts[i].fieldno = i;
-
-			field_desc[i].type = key_def->parts[i].type;
-			field_desc[i].base = -1;
-			field_desc[i].disp = 0;
-		}
 	}
 	return self;
 }
@@ -477,8 +506,6 @@ SPTREE_DEF(index, realloc);
 - (void) free
 {
 	position->free(position);
-	free(parts);
-	free(field_desc);
 	[super free];
 }
 
@@ -591,6 +618,71 @@ SPTREE_DEF(index, realloc);
 
 /* }}} */
 
+/* {{{ BaseIndex -- base class for all indexes.  ******************/
+
+@implementation BaseIndex
+
+- (id) init: (struct key_def *) key_def_arg :(struct space *) space_arg
+{
+	self = [super init: key_def_arg :space_arg];
+	if (self) {
+
+		/* Initialize key metadata. */
+		size_t sz = sizeof(struct key_part) * key_def->part_count;
+		key_parts = malloc(sz);
+		if (key_parts == NULL)
+			panic("malloc(): failed to allocate %"PRI_SZ" bytes", sz);
+
+		sz = sizeof(struct field_desc) * key_def->part_count;
+		key_field_desc = malloc(sz);
+		if (key_field_desc == NULL)
+			panic("malloc(): failed to allocate %"PRI_SZ" bytes", sz);
+
+		for (int i = 0; i < key_def->part_count; i++) {
+			key_parts[i].type = key_def->parts[i].type;
+			key_parts[i].fieldno = i;
+
+			key_field_desc[i].type = key_def->parts[i].type;
+			key_field_desc[i].base = -1;
+			key_field_desc[i].disp = 0;
+		}
+
+		/* Initialize common search helper. */
+		common_helper.index = self;
+		common_helper.part_count = key_def->part_count;
+		if (key_def->needs_offset_table) {
+			sz = key_def->part_count * sizeof(uint32_t);
+			common_helper.a.offset_table = malloc(sz);
+			common_helper.b.offset_table = malloc(sz);
+			if (common_helper.a.offset_table == NULL
+			    || common_helper.b.offset_table == NULL)
+				panic("malloc(): failed to allocate %"PRI_SZ" bytes", sz);
+		} else {
+			common_helper.a.offset_table = NULL;
+			common_helper.b.offset_table = NULL;
+		}
+		search_set_tuple_meta(&common_helper.a, &common_helper);
+		search_set_tuple_meta(&common_helper.b, &common_helper);
+	}
+	return self;
+}
+
+- (void) free
+{
+	if (key_def->needs_offset_table) {
+		free(common_helper.a.offset_table);
+		free(common_helper.b.offset_table);
+	}
+
+	free(key_parts);
+	free(key_field_desc);
+	[super free];
+}
+
+@end
+
+/* }}} */
+
 /* {{{ HashIndex. *************************************************/
 
 struct hash_iterator {
@@ -651,9 +743,7 @@ hash_iterator_free(struct iterator *iterator)
 
 - (void) reserve: (u32) n_tuples
 {
-	INDEX_SEARCH_DEFINE(helper, self);
-
-	mh_tuple_table_reserve(&helper, &hash, n_tuples);
+	mh_tuple_table_reserve(&common_helper, &hash, n_tuples);
 }
 
 - (void) beginBuild
@@ -708,9 +798,9 @@ hash_iterator_free(struct iterator *iterator)
 
 - (struct tuple *) findUnsafe: (void *) key :(int) part_count
 {
-	INDEX_KEY_SEARCH_DEFINE(helper, self, key, part_count);
+	DEFINE_KEY_SEARCH_DATA(helper, self, key, part_count);
 
-	mh_int_t k = mh_tuple_table_get(&helper, &hash, NULL);
+	mh_int_t k = mh_tuple_table_get(&helper, &hash, SEARCH_KEY);
 	struct tuple *ret = NULL;
 	if (k != mh_end(&hash))
 		ret = mh_value(&hash, k);
@@ -721,9 +811,9 @@ hash_iterator_free(struct iterator *iterator)
 {
 	assert((tuple->flags & IN_SPACE) != 0);
 
-	INDEX_SEARCH_DEFINE(helper, self);
+	DEFINE_SEARCH_DATA(helper, self, tuple);
 
-	mh_int_t k = mh_tuple_table_get(&helper, &hash, tuple);
+	mh_int_t k = mh_tuple_table_get(&helper, &hash, SEARCH_TUPLE);
 	struct tuple *ret = NULL;
 	if (k != mh_end(&hash))
 		ret = mh_value(&hash, k);
@@ -734,9 +824,9 @@ hash_iterator_free(struct iterator *iterator)
 {
 	assert((tuple->flags & IN_SPACE) != 0);
 
-	INDEX_SEARCH_DEFINE(helper, self);
+	DEFINE_SEARCH_DATA(helper, self, tuple);
 
-	mh_int_t k = mh_tuple_table_get(&helper, &hash, tuple);
+	mh_int_t k = mh_tuple_table_get(&helper, &hash, SEARCH_TUPLE);
 	if (k != mh_end(&hash))
 		mh_tuple_table_del(&helper, &hash, k);
 }
@@ -746,16 +836,18 @@ hash_iterator_free(struct iterator *iterator)
 {
 	assert((new_tuple->flags & IN_SPACE) != 0);
 
-	INDEX_SEARCH_DEFINE(helper, self);
+	DEFINE_SEARCH_DATA_NOTUPLE(helper, self);
 
 	if (old_tuple != NULL) {
 		assert((old_tuple->flags & IN_SPACE) != 0);
 
-		mh_int_t k = mh_tuple_table_get(&helper, &hash, old_tuple);
+		search_set_tuple_data(&helper.a, &helper, old_tuple);
+		mh_int_t k = mh_tuple_table_get(&helper, &hash, SEARCH_TUPLE);
 		if (k != mh_end(&hash))
 			mh_tuple_table_del(&helper, &hash, k);
 	}
 
+	search_set_tuple_data(&helper.a, &helper, new_tuple);
 	mh_int_t pos = mh_tuple_table_put(&helper, &hash, new_tuple, NULL);
 	if (pos == mh_end(&hash))
 		tnt_raise(LoggedError, :ER_MEMORY_ISSUE, (ssize_t) pos,
@@ -787,9 +879,9 @@ hash_iterator_free(struct iterator *iterator)
 
 	it->base.next_equal = iterator_first_equal;
 
-	INDEX_KEY_SEARCH_DEFINE(helper, self, key, part_count);
+	DEFINE_KEY_SEARCH_DATA(helper, self, key, part_count);
 
-	it->h_pos = mh_tuple_table_get(&helper, &hash, NULL);
+	it->h_pos = mh_tuple_table_get(&helper, &hash, SEARCH_KEY);
 	it->index = self;
 }
 
@@ -855,8 +947,11 @@ tree_node_cmp(const void *node_a, const void *node_b, void *arg)
 {
 	struct tuple *const *tuple_a = node_a;
 	struct tuple *const *tuple_b = node_b;
-	struct index_search_helper *helper = arg;
-	return index_search_compare(helper, tuple_a ? *tuple_a : NULL, *tuple_b);
+	struct search_helper *helper = arg;
+	return search_compare(helper,
+			      IS_PSEUDO_TUPLE(tuple_a) ?
+			      (struct tuple *) tuple_a : *tuple_a,
+			      *tuple_b);
 }
 
 static int
@@ -864,10 +959,14 @@ tree_dup_node_cmp(const void *node_a, const void *node_b, void *arg)
 {
 	struct tuple *const *tuple_a = node_a;
 	struct tuple *const *tuple_b = node_b;
-	struct index_search_helper *helper = arg;
-	int r = index_search_compare(helper, tuple_a ? *tuple_a : NULL, *tuple_b);
+	struct search_helper *helper = arg;
+	int r = search_compare(helper,
+			       IS_PSEUDO_TUPLE(tuple_a) ?
+			       (struct tuple *) tuple_a : *tuple_a,
+			       *tuple_b);
 	if (r == 0) {
-		r = ta_cmp(tuple_a ? *tuple_a : NULL, *tuple_b);
+		r = ta_cmp(IS_PSEUDO_TUPLE(tuple_a) ? NULL : *tuple_a,
+			   *tuple_b);
 	}
 	return r;
 }
@@ -897,9 +996,9 @@ tree_iterator_next_equal(struct iterator *iterator)
 	struct tree_iterator *it = tree_iterator(iterator);
 	struct tuple **tuplep = sptree_index_iterator_next(it->iter);
 	if (tuplep != NULL) {
-		INDEX_KEY_SEARCH_DEFINE(helper, it->index, it->key, it->part_count);
+		DEFINE_KEY_SEARCH_DATA(helper, it->index, it->key, it->part_count);
 
-		if (it->index->tree.compare(NULL, tuplep, &helper) == 0) {
+		if (it->index->tree.compare(SEARCH_KEY, tuplep, &helper) == 0) {
 			return *tuplep;
 		}
 	}
@@ -913,9 +1012,9 @@ tree_iterator_reverse_next_equal(struct iterator *iterator)
 	struct tree_iterator *it = tree_iterator(iterator);
 	struct tuple **tuplep = sptree_index_iterator_reverse_next(it->iter);
 	if (tuplep != NULL) {
-		INDEX_KEY_SEARCH_DEFINE(helper, it->index, it->key, it->part_count);
+		DEFINE_KEY_SEARCH_DATA(helper, it->index, it->key, it->part_count);
 
-		if (it->index->tree.compare(NULL, tuplep, &helper) == 0) {
+		if (it->index->tree.compare(SEARCH_KEY, tuplep, &helper) == 0) {
 			return *tuplep;
 		}
 	}
@@ -968,9 +1067,9 @@ tree_iterator_free(struct iterator *iterator)
 
 - (struct tuple *) findUnsafe: (void *) key : (int) part_count
 {
-	INDEX_KEY_SEARCH_DEFINE(helper, self, key, part_count);
+	DEFINE_KEY_SEARCH_DATA(helper, self, key, part_count);
 
-	struct tuple **tuplep = sptree_index_find(&tree, NULL, &helper);
+	struct tuple **tuplep = sptree_index_find(&tree, SEARCH_KEY, &helper);
 	return tuplep != NULL ? *tuplep : NULL;
 }
 
@@ -978,9 +1077,9 @@ tree_iterator_free(struct iterator *iterator)
 {
 	assert((tuple->flags & IN_SPACE) != 0);
 
-	INDEX_SEARCH_DEFINE(helper, self);
+	DEFINE_SEARCH_DATA(helper, self, tuple);
 
-	struct tuple **tuplep = sptree_index_find(&tree, &tuple, &helper);
+	struct tuple **tuplep = sptree_index_find(&tree, SEARCH_TUPLE, &helper);
 	return tuplep != NULL ? *tuplep : NULL;
 }
 
@@ -988,9 +1087,9 @@ tree_iterator_free(struct iterator *iterator)
 {
 	assert((tuple->flags & IN_SPACE) != 0);
 
-	INDEX_SEARCH_DEFINE(helper, self);
+	DEFINE_SEARCH_DATA(helper, self, tuple);
 
-	sptree_index_delete(&tree, &tuple, &helper);
+	sptree_index_delete(&tree, SEARCH_TUPLE, &helper);
 }
 
 - (void) replace: (struct tuple *) old_tuple
@@ -1003,13 +1102,15 @@ tree_iterator_free(struct iterator *iterator)
 		tnt_raise(ClientError, :ER_NO_SUCH_FIELD,
 			  key_def->max_fieldno);
 
-	INDEX_SEARCH_DEFINE(helper, self);
+	DEFINE_SEARCH_DATA_NOTUPLE(helper, self);
 
 	if (old_tuple) {
 		assert((old_tuple->flags & IN_SPACE) != 0);
-
-		sptree_index_delete(&tree, &old_tuple, &helper);
+		search_set_tuple_data(&helper.a, &helper, old_tuple);
+		sptree_index_delete(&tree, SEARCH_TUPLE, &helper);
 	}
+
+	search_set_tuple_data(&helper.a, &helper, new_tuple);
 	sptree_index_insert(&tree, &new_tuple, &helper);
 }
 
@@ -1037,19 +1138,19 @@ tree_iterator_free(struct iterator *iterator)
 	assert(iterator->free == tree_iterator_free);
 	struct tree_iterator *it = tree_iterator(iterator);
 
-	INDEX_KEY_SEARCH_DEFINE(helper, self, key, part_count);
+	DEFINE_KEY_SEARCH_DATA(helper, self, key, part_count);
 	tree_iterator_set_key(it, key, part_count);
 
 	if (type == ITER_FORWARD) {
 		it->base.next = tree_iterator_next;
 		it->base.next_equal = tree_iterator_next_equal;
 		sptree_index_iterator_init_set(&tree, &it->iter,
-					       NULL, &helper);
+					       SEARCH_KEY, &helper);
 	} else if (type == ITER_REVERSE) {
 		it->base.next = tree_iterator_reverse_next;
 		it->base.next_equal = tree_iterator_reverse_next_equal;
 		sptree_index_iterator_reverse_init_set(&tree, &it->iter,
-						       NULL, &helper);
+						       SEARCH_KEY, &helper);
 	}
 }
 
@@ -1091,12 +1192,10 @@ tree_iterator_free(struct iterator *iterator)
 	u32 estimated_tuples = tree.max_size;
 	void *nodes = tree.members;
 
-	INDEX_SEARCH_DEFINE(helper, self);
-
 	sptree_index_init(&tree,
 			  sizeof(struct tuple *), nodes, n_tuples,
 			  estimated_tuples, tree_node_cmp, tree_node_cmp,
-			  &helper);
+			  &common_helper);
 }
 
 - (void) build: (Index *) pk
@@ -1130,14 +1229,12 @@ tree_iterator_free(struct iterator *iterator)
 			 index_n(self));
 	}
 
-	INDEX_SEARCH_DEFINE(helper, self);
-
 	/* If n_tuples == 0 then estimated_tuples = 0, elem == NULL, tree is empty */
 	sptree_index_init(&tree,
 			  sizeof(struct tuple *), nodes, n_tuples,
 			  estimated_tuples, tree_node_cmp,
 			  key_def->is_unique ? tree_node_cmp : tree_dup_node_cmp,
-			  &helper);
+			  &common_helper);
 }
 
 @end

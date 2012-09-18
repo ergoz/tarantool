@@ -60,9 +60,6 @@ struct index_traits
 	 * box_process(). Should not be used elsewhere.
 	 */
 	struct iterator *position;
-
-	struct key_part *parts;
-	struct field_desc *field_desc;
 };
 
 /**
