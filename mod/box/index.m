@@ -39,6 +39,9 @@
 
 #include <stdio.h>
 
+/* Pseudo-tuple indicating a key.  */
+#define SEARCH_KEY ((struct tuple *) 0)
+
 static struct index_traits index_traits = {
 	.allows_partial_key = true,
 };
@@ -73,10 +76,7 @@ u64_cmp(u64 a, u64 b)
 static inline int
 ta_cmp(const struct tuple *tuple_a, const struct tuple *tuple_b)
 {
-	if (!tuple_a)
-		return 0;
-	if (!tuple_b)
-		return 0;
+	assert(tuple_a != NULL && tuple_b != NULL);
 	return tuple_a < tuple_b ? -1 : (tuple_a > tuple_b);
 }
 
@@ -98,12 +98,6 @@ iterator_first_equal(struct iterator *it)
 /* {{{ Index search routines. *************************************/
 
 @class BaseIndex;
-
-/* Pseudo tuples. */
-#define SEARCH_KEY	((struct tuple *) 257)
-#define SEARCH_TUPLE	((struct tuple *) 259)
-
-#define IS_PSEUDO_TUPLE(t) ((void *) (t) <= (void *) SEARCH_TUPLE)
 
 /**
  * The data relevant to the search request over a given index. It consists
@@ -233,7 +227,7 @@ search_set_key(struct search_data *data,
 	data->data = key;
 	data->field_desc = helper->index->key_field_desc;
 	data->parts = helper->index->key_parts;
-	data->tuple = NULL;
+	data->tuple = SEARCH_KEY;
 }
 
 static void
@@ -347,7 +341,7 @@ search_load_n64_part(struct search_part_data *part_data,
 static uint32_t
 search_hash(struct search_helper *x, const struct tuple *tuple)
 {
-	if (!IS_PSEUDO_TUPLE(tuple)) {
+	if (x->a.tuple != tuple) {
 		x = &x->index->common_helper;
 		search_set_tuple_data(&x->a, x, tuple);
 	}
@@ -367,7 +361,7 @@ search_equal(struct search_helper *x,
 	     const struct tuple *tuple_a,
 	     const struct tuple *tuple_b)
 {
-	if (!IS_PSEUDO_TUPLE(tuple_a)) {
+	if (x->a.tuple != tuple_a) {
 		x = &x->index->common_helper;
 		search_set_tuple_data(&x->a, x, tuple_a);
 	}
@@ -393,7 +387,7 @@ search_compare(struct search_helper *x,
 	       const struct tuple *tuple_a,
 	       const struct tuple *tuple_b)
 {
-	if (!IS_PSEUDO_TUPLE(tuple_a)) {
+	if (x->a.tuple != tuple_a) {
 		x = &x->index->common_helper;
 		search_set_tuple_data(&x->a, x, tuple_a);
 	}
@@ -813,7 +807,7 @@ hash_iterator_free(struct iterator *iterator)
 
 	DEFINE_SEARCH_DATA(helper, self, tuple);
 
-	mh_int_t k = mh_tuple_table_get(&helper, &hash, SEARCH_TUPLE);
+	mh_int_t k = mh_tuple_table_get(&helper, &hash, tuple);
 	struct tuple *ret = NULL;
 	if (k != mh_end(&hash))
 		ret = mh_value(&hash, k);
@@ -826,7 +820,7 @@ hash_iterator_free(struct iterator *iterator)
 
 	DEFINE_SEARCH_DATA(helper, self, tuple);
 
-	mh_int_t k = mh_tuple_table_get(&helper, &hash, SEARCH_TUPLE);
+	mh_int_t k = mh_tuple_table_get(&helper, &hash, tuple);
 	if (k != mh_end(&hash))
 		mh_tuple_table_del(&helper, &hash, k);
 }
@@ -842,7 +836,7 @@ hash_iterator_free(struct iterator *iterator)
 		assert((old_tuple->flags & IN_SPACE) != 0);
 
 		search_set_tuple_data(&helper.a, &helper, old_tuple);
-		mh_int_t k = mh_tuple_table_get(&helper, &hash, SEARCH_TUPLE);
+		mh_int_t k = mh_tuple_table_get(&helper, &hash, old_tuple);
 		if (k != mh_end(&hash))
 			mh_tuple_table_del(&helper, &hash, k);
 	}
@@ -948,10 +942,7 @@ tree_node_cmp(const void *node_a, const void *node_b, void *arg)
 	struct tuple *const *tuple_a = node_a;
 	struct tuple *const *tuple_b = node_b;
 	struct search_helper *helper = arg;
-	return search_compare(helper,
-			      IS_PSEUDO_TUPLE(tuple_a) ?
-			      (struct tuple *) tuple_a : *tuple_a,
-			      *tuple_b);
+	return search_compare(helper, *tuple_a, *tuple_b);
 }
 
 static int
@@ -960,14 +951,9 @@ tree_dup_node_cmp(const void *node_a, const void *node_b, void *arg)
 	struct tuple *const *tuple_a = node_a;
 	struct tuple *const *tuple_b = node_b;
 	struct search_helper *helper = arg;
-	int r = search_compare(helper,
-			       IS_PSEUDO_TUPLE(tuple_a) ?
-			       (struct tuple *) tuple_a : *tuple_a,
-			       *tuple_b);
-	if (r == 0) {
-		r = ta_cmp(IS_PSEUDO_TUPLE(tuple_a) ? NULL : *tuple_a,
-			   *tuple_b);
-	}
+	int r = search_compare(helper, *tuple_a, *tuple_b);
+	if (r == 0)
+		r = ta_cmp(*tuple_a, *tuple_b);
 	return r;
 }
 
@@ -998,7 +984,8 @@ tree_iterator_next_equal(struct iterator *iterator)
 	if (tuplep != NULL) {
 		DEFINE_KEY_SEARCH_DATA(helper, it->index, it->key, it->part_count);
 
-		if (it->index->tree.compare(SEARCH_KEY, tuplep, &helper) == 0) {
+		struct tuple *pseudo = SEARCH_KEY;
+		if (it->index->tree.compare(&pseudo, tuplep, &helper) == 0) {
 			return *tuplep;
 		}
 	}
@@ -1014,7 +1001,8 @@ tree_iterator_reverse_next_equal(struct iterator *iterator)
 	if (tuplep != NULL) {
 		DEFINE_KEY_SEARCH_DATA(helper, it->index, it->key, it->part_count);
 
-		if (it->index->tree.compare(SEARCH_KEY, tuplep, &helper) == 0) {
+		struct tuple *pseudo = SEARCH_KEY;
+		if (it->index->tree.compare(&pseudo, tuplep, &helper) == 0) {
 			return *tuplep;
 		}
 	}
@@ -1069,7 +1057,8 @@ tree_iterator_free(struct iterator *iterator)
 {
 	DEFINE_KEY_SEARCH_DATA(helper, self, key, part_count);
 
-	struct tuple **tuplep = sptree_index_find(&tree, SEARCH_KEY, &helper);
+	struct tuple *pseudo = SEARCH_KEY;
+	struct tuple **tuplep = sptree_index_find(&tree, &pseudo, &helper);
 	return tuplep != NULL ? *tuplep : NULL;
 }
 
@@ -1079,7 +1068,7 @@ tree_iterator_free(struct iterator *iterator)
 
 	DEFINE_SEARCH_DATA(helper, self, tuple);
 
-	struct tuple **tuplep = sptree_index_find(&tree, SEARCH_TUPLE, &helper);
+	struct tuple **tuplep = sptree_index_find(&tree, &tuple, &helper);
 	return tuplep != NULL ? *tuplep : NULL;
 }
 
@@ -1089,7 +1078,7 @@ tree_iterator_free(struct iterator *iterator)
 
 	DEFINE_SEARCH_DATA(helper, self, tuple);
 
-	sptree_index_delete(&tree, SEARCH_TUPLE, &helper);
+	sptree_index_delete(&tree, &tuple, &helper);
 }
 
 - (void) replace: (struct tuple *) old_tuple
@@ -1107,7 +1096,7 @@ tree_iterator_free(struct iterator *iterator)
 	if (old_tuple) {
 		assert((old_tuple->flags & IN_SPACE) != 0);
 		search_set_tuple_data(&helper.a, &helper, old_tuple);
-		sptree_index_delete(&tree, SEARCH_TUPLE, &helper);
+		sptree_index_delete(&tree, &old_tuple, &helper);
 	}
 
 	search_set_tuple_data(&helper.a, &helper, new_tuple);
@@ -1141,16 +1130,17 @@ tree_iterator_free(struct iterator *iterator)
 	DEFINE_KEY_SEARCH_DATA(helper, self, key, part_count);
 	tree_iterator_set_key(it, key, part_count);
 
+	struct tuple *pseudo = SEARCH_KEY;
 	if (type == ITER_FORWARD) {
 		it->base.next = tree_iterator_next;
 		it->base.next_equal = tree_iterator_next_equal;
 		sptree_index_iterator_init_set(&tree, &it->iter,
-					       SEARCH_KEY, &helper);
+					       &pseudo, &helper);
 	} else if (type == ITER_REVERSE) {
 		it->base.next = tree_iterator_reverse_next;
 		it->base.next_equal = tree_iterator_reverse_next_equal;
 		sptree_index_iterator_reverse_init_set(&tree, &it->iter,
-						       SEARCH_KEY, &helper);
+						       &pseudo, &helper);
 	}
 }
 
