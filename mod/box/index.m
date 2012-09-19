@@ -207,7 +207,7 @@ struct search_helper
 	struct search_helper v = KEY_SEARCH_HELPER(idx, cnt);		\
 	v.a.offset_table = NULL;					\
 	v.b.offset_table = SEARCH_OFFSET_TABLE(idx);			\
-	search_set_key(&v.b, &v, key);					\
+	search_set_key(&v.a, &v, key);					\
 	search_set_tuple_meta(&v.b, &v);
 
 #define DEFINE_SEARCH_DATA(v, idx, tuple)				\
