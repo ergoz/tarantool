@@ -70,16 +70,6 @@ u64_cmp(u64 a, u64 b)
 	return a < b ? -1 : (a > b);
 }
 
-/**
- * Tuple address comparison.
- */
-static inline int
-ta_cmp(const struct tuple *tuple_a, const struct tuple *tuple_b)
-{
-	assert(tuple_a != NULL && tuple_b != NULL);
-	return tuple_a < tuple_b ? -1 : (tuple_a > tuple_b);
-}
-
 static struct tuple *
 iterator_next_equal(struct iterator *it __attribute__((unused)))
 {
@@ -124,21 +114,6 @@ struct search_data
 	/* The offset data needed for non-linear field access. */
 	u32 *offset_table;
 };
-
-/**
- * Current field data (for iteration over search_data).
- */
-struct search_part_data
-{
-	u32 size;
-	const u8 *data;
-	const u8 *next;
-};
-
-#define DEFINE_PART_DATA(v, search_data_p)				\
-	struct search_part_data v = { .size = 0,			\
-				      .data = NULL,			\
-				      .next = (search_data_p)->data }
 
 /**
  * Helper struct to pass additional info to functions that perform
@@ -290,8 +265,7 @@ search_set_tuple_data(struct search_data *data,
 }
 
 static inline const u8 *
-search_get_part(struct search_part_data *part_data,
-		struct search_data *data, int part)
+search_get_part(struct search_data *data, int part, const u8* prev_data_end)
 {
 	const u8 *ptr;
 	if (unlikely(data->offset_table != NULL)) {
@@ -300,7 +274,7 @@ search_get_part(struct search_part_data *part_data,
 		int field = data->parts[part].fieldno;
 		int base = data->field_desc[field].base;
 		if (unlikely(base < 0)) {
-			ptr = part_data->next;
+			ptr = prev_data_end;
 		} else {
 			ptr = data->data + data->field_desc[field].disp;
 			if (base > 0)
@@ -310,50 +284,49 @@ search_get_part(struct search_part_data *part_data,
 	return ptr;
 }
 
-static inline void
-search_load_part(struct search_part_data *part_data,
-		 struct search_data *data, int part)
-{
-	const u8 *ptr = search_get_part(part_data, data, part);
-	part_data->size = load_varint32((void**) &ptr);
-	part_data->next = ptr + part_data->size;
-	part_data->data = ptr;
-}
-
-static inline u32
-search_load_n32_part(struct search_part_data *part_data,
-		     struct search_data *data, int part)
-{
-	const u8 *ptr = search_get_part(part_data, data, part);
-	part_data->next = ptr + 5;
-	return *((u32 *) (ptr + 1));
-}
-
-static inline u64
-search_load_n64_part(struct search_part_data *part_data,
-		     struct search_data *data, int part)
-{
-	const u8 *ptr = search_get_part(part_data, data, part);
-	part_data->next = ptr + 9;
-	return *((u64 *) (ptr + 1));
-}
-
 static uint32_t
 search_hash(struct search_helper *x, const struct tuple *tuple)
 {
+	/* Prepare data for hashing. */
 	if (x->a.tuple != tuple) {
+		/* This call is made on behalf of the index build
+		   or rehash procedure. */
 		x = &x->index->common_helper;
 		search_set_tuple_data(&x->a, x, tuple);
 	}
 
-	DEFINE_PART_DATA(a, &x->a);
-
+	/* Initial hash value. */
 	uint32_t h = 13;
-	for (int part = 0; part < x->part_count; part++) {
-		search_load_part(&a, &x->a, part);
-		h = MurmurHash2(a.data, a.size, h);
+
+	/* Hash data part by part. */
+	assert(x->part_count > 0);
+	int part = 0, part_count = x->part_count;
+	const u8 *adata = search_get_part(&x->a, part, x->a.data);
+	for (;;) {
+		if (x->a.parts[part].type == NUM) {
+			assert(*adata == 4);
+			u32 a32 = *((u32 *) (adata + 1));
+			h = (h << 9) ^ (h >> 23) ^ a32;
+			if (++part == part_count)
+				return h;
+			adata += 5;
+		} else if (x->a.parts[part].type == NUM64) {
+			assert(*adata == 8);
+			u64 a64 = *((u64 *) (adata + 1));
+			h = (h << 9) ^ (h >> 23) ^ (uint32_t) (a64);
+			h = (h << 9) ^ (h >> 23) ^ (uint32_t) (a64 >> 32);
+			if (++part == part_count)
+				return h;
+			adata += 9;
+		} else {
+			int asize = load_varint32((void**) &adata);
+			h = MurmurHash2(adata, asize, h);
+			if (++part == part_count)
+				return h;
+			adata += asize;
+		}
+		adata = search_get_part(&x->a, part, adata);
 	}
-	return h;
 }
 
 static int
@@ -361,25 +334,59 @@ search_equal(struct search_helper *x,
 	     const struct tuple *tuple_a,
 	     const struct tuple *tuple_b)
 {
+	/* Prepare data for comparison. */
 	if (x->a.tuple != tuple_a) {
+		/* This call is made on behalf of the index build
+		   or rehash procedure. */
 		x = &x->index->common_helper;
 		search_set_tuple_data(&x->a, x, tuple_a);
 	}
 	search_set_tuple_data(&x->b, x, tuple_b);
 
-	DEFINE_PART_DATA(a, &x->a);
-	DEFINE_PART_DATA(b, &x->b);
-
-	for (int part = 0; part < x->part_count; part++) {
-		search_load_part(&a, &x->a, part);
-		search_load_part(&b, &x->b, part);
-		if (a.size != b.size)
-			return 0;
-		if (memcmp(a.data, b.data, a.size) != 0)
-			return 0;
+	/* Compare data part by part. */
+	assert(x->part_count > 0);
+	int part = 0, part_count = x->part_count;
+	const u8 *adata = search_get_part(&x->a, part, x->a.data);
+	const u8 *bdata = search_get_part(&x->b, part, x->b.data);
+	for (;;) {
+		assert(x->a.parts[part].type == x->b.parts[part].type);
+		if (x->a.parts[part].type == NUM) {
+			assert(*adata == 4);
+			assert(*bdata == 4);
+			u32 a32 = *((u32 *) (adata + 1));
+			u32 b32 = *((u32 *) (bdata + 1));
+			if (a32 != b32)
+				return 0;
+			if (++part == part_count)
+				return 1;
+			adata += 5;
+			bdata += 5;
+		} else if (x->a.parts[part].type == NUM64) {
+			assert(*adata == 8);
+			assert(*bdata == 8);
+			u32 a64 = *((u64 *) (adata + 1));
+			u32 b64 = *((u64 *) (bdata + 1));
+			if (a64 != b64)
+				return 0;
+			if (++part == part_count)
+				return 1;
+			adata += 9;
+			bdata += 9;
+		} else {
+			int asize = load_varint32((void**) &adata);
+			int bsize = load_varint32((void**) &bdata);
+			if (asize != bsize)
+				return 0;
+			if (memcmp(adata, bdata, asize) != 0)
+				return 0;
+			if (++part == part_count)
+				return 1;
+			adata += asize;
+			bdata += asize;
+		}
+		adata = search_get_part(&x->a, part, adata);
+		bdata = search_get_part(&x->b, part, bdata);
 	}
-
-	return 1;
 }
 
 static int
@@ -387,42 +394,65 @@ search_compare(struct search_helper *x,
 	       const struct tuple *tuple_a,
 	       const struct tuple *tuple_b)
 {
+	/* Prepare data for comparison. */
 	if (x->a.tuple != tuple_a) {
+		/* This call is made on behalf of the index build
+		   or rebalance procedure. */
 		x = &x->index->common_helper;
 		search_set_tuple_data(&x->a, x, tuple_a);
+	} else if (x->part_count == 0) {
+		/* This must be a search by an empty key, which
+		   matches every tuple. */
+		assert(tuple_a == SEARCH_KEY);
+		return 0;
 	}
 	search_set_tuple_data(&x->b, x, tuple_b);
 
-	DEFINE_PART_DATA(a, &x->a);
-	DEFINE_PART_DATA(b, &x->b);
-
-	for (int part = 0; part < x->part_count; part++) {
-		int cmp;
-
-		int field = x->a.parts[part].fieldno;
-		if (x->a.field_desc[field].type == NUM) {
-			u32 a32 = search_load_n32_part(&a, &x->a, part);
-			u32 b32 = search_load_n32_part(&b, &x->b, part);
-			cmp = u32_cmp(a32, b32);
-		} else if (x->a.field_desc[field].type == NUM64) {
-			u64 a64 = search_load_n64_part(&a, &x->a, part);
-			u64 b64 = search_load_n64_part(&b, &x->b, part);
-			cmp = u64_cmp(a64, b64);
+	/* Compare data part by part. */
+	assert(x->part_count > 0);
+	int part = 0, part_count = x->part_count;
+	const u8 *adata = search_get_part(&x->a, part, x->a.data);
+	const u8 *bdata = search_get_part(&x->b, part, x->b.data);
+	for (;;) {
+		assert(x->a.parts[part].type == x->b.parts[part].type);
+		if (x->a.parts[part].type == NUM) {
+			assert(*adata == 4);
+			assert(*bdata == 4);
+			int r = u32_cmp(*((u32 *) (adata + 1)),
+					*((u32 *) (bdata + 1)));
+			if (r || ++part == part_count)
+				return r;
+			adata += 5;
+			bdata += 5;
+		} else if (x->a.parts[part].type == NUM64) {
+			assert(*adata == 8);
+			assert(*bdata == 8);
+			int r = u64_cmp(*((u64 *) (adata + 1)),
+					*((u64 *) (bdata + 1)));
+			if (r || ++part == part_count)
+				return r;
+			adata += 9;
+			bdata += 9;
 		} else {
-			search_load_part(&a, &x->a, part);
-			search_load_part(&b, &x->b, part);
-			cmp = memcmp(a.data, b.data, MIN(a.size, b.size));
-			if (cmp == 0) {
-				cmp = ((int) a.size) - ((int) b.size);
+			int asize = load_varint32((void**) &adata);
+			int bsize = load_varint32((void**) &bdata);
+			if (asize < bsize) {
+				int r = memcmp(adata, bdata, asize);
+				return r ? r : -1;
+			} else if (asize > bsize) {
+				int r = memcmp(adata, bdata, bsize);
+				return r ? r : +1;
+			} else {
+				int r = memcmp(adata, bdata, asize);
+				if (r || ++part == part_count)
+					return r;
+				adata += asize;
+				bdata += asize;
 			}
 		}
-
-		if (cmp) {
-			return cmp;
-		}
+		adata = search_get_part(&x->a, part, adata);
+		bdata = search_get_part(&x->b, part, bdata);
 	}
-
-	return 0;
 }
 
 /* }}} */
@@ -939,9 +969,9 @@ tree_iterator_set_key(struct tree_iterator *it,
 static int
 tree_node_cmp(const void *node_a, const void *node_b, void *arg)
 {
+	struct search_helper *helper = arg;
 	struct tuple *const *tuple_a = node_a;
 	struct tuple *const *tuple_b = node_b;
-	struct search_helper *helper = arg;
 	return search_compare(helper, *tuple_a, *tuple_b);
 }
 
@@ -950,11 +980,15 @@ tree_dup_node_cmp(const void *node_a, const void *node_b, void *arg)
 {
 	struct tuple *const *tuple_a = node_a;
 	struct tuple *const *tuple_b = node_b;
+	if (*tuple_a == *tuple_b)
+		return 0;
+
 	struct search_helper *helper = arg;
 	int r = search_compare(helper, *tuple_a, *tuple_b);
-	if (r == 0)
-		r = ta_cmp(*tuple_a, *tuple_b);
-	return r;
+	if (r != 0)
+		return r;
+
+	return *tuple_a < *tuple_b ? -1 : 1;
 }
 
 static struct tuple *
