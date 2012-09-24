@@ -477,6 +477,9 @@ memcached_space_init()
 	key_def->parts = mcmalloc(sizeof(struct key_part));
 	key_def->parts[0].fieldno = 0;
 	key_def->parts[0].type = STRING;
+	key_def->parts[0].offset_code = DISP_ONLY;
+	key_def->parts[0].base = 0;
+	key_def->parts[0].disp = 0;
 	key_def->cmp_order = mcmalloc(sizeof(u32));
 	key_def->cmp_order[0] = 0;
 	key_def->max_fieldno = 1;

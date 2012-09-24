@@ -100,11 +100,10 @@ iterator_first_equal(struct iterator *it)
 struct search_data
 {
 	/* The entire key data. */
-       	const void *data;
+       	const u8 *data;
 
 	/* Description of the key. */
 	struct key_part *parts;
-	struct field_desc *field_desc;
 
 	/* The tuple the key data goes from. May be NULL if the data goes
 	   from a genuine key. The tuple is needed to access its base offset
@@ -144,7 +143,6 @@ struct search_helper
 @public
 	/* Metadata for keys. */
 	struct key_part *key_parts;
-	struct field_desc *key_field_desc;
 
 	/* Search helper utilized for index maintenance
 	   rather than tuple lookup. */
@@ -200,16 +198,14 @@ search_set_key(struct search_data *data,
 	       const void *key)
 {
 	data->data = key;
-	data->field_desc = helper->index->key_field_desc;
-	data->parts = helper->index->key_parts;
 	data->tuple = SEARCH_KEY;
+	data->parts = helper->index->key_parts;
 }
 
 static void
 search_set_tuple_meta(struct search_data *data,
-			  struct search_helper *helper)
+		      struct search_helper *helper)
 {
-	data->field_desc = helper->index->space->field_desc;
 	data->parts = helper->index->key_def->parts;
 }
 
@@ -267,21 +263,19 @@ search_set_tuple_data(struct search_data *data,
 static inline const u8 *
 search_get_part(struct search_data *data, int part, const u8* prev_data_end)
 {
-	const u8 *ptr;
-	if (unlikely(data->offset_table != NULL)) {
-		ptr = data->data + data->offset_table[part];
-	} else {
-		int field = data->parts[part].fieldno;
-		int base = data->field_desc[field].base;
-		if (unlikely(base < 0)) {
-			ptr = prev_data_end;
-		} else {
-			ptr = data->data + data->field_desc[field].disp;
-			if (base > 0)
-				ptr += space_get_base_offset(data->tuple, base);
-		}
+	switch(data->parts[part].offset_code) {
+	case BASE_DISP:
+		return (data->data + data->parts[part].disp
+			+ space_get_base_offset(data->tuple,
+						data->parts[part].base));
+	case DISP_ONLY:
+		return (data->data + data->parts[part].disp);
+	case OFFSET_TABLE:
+		return (data->data + data->offset_table[part]);
+	case NEXT_FIELD:
+		return prev_data_end;
 	}
-	return ptr;
+	panic("bad offset code");
 }
 
 static uint32_t
@@ -300,32 +294,30 @@ search_hash(struct search_helper *x, const struct tuple *tuple)
 
 	/* Hash data part by part. */
 	assert(x->part_count > 0);
-	int part = 0, part_count = x->part_count;
-	const u8 *adata = search_get_part(&x->a, part, x->a.data);
-	for (;;) {
+	const u8 *adata = search_get_part(&x->a, 0, NULL);
+	for (int part = 0;;) {
 		if (x->a.parts[part].type == NUM) {
 			assert(*adata == 4);
 			u32 a32 = *((u32 *) (adata + 1));
 			h = (h << 9) ^ (h >> 23) ^ a32;
-			if (++part == part_count)
+			if (++part == x->part_count)
 				return h;
-			adata += 5;
+			adata = search_get_part(&x->a, part, adata + 1 + 4);
 		} else if (x->a.parts[part].type == NUM64) {
 			assert(*adata == 8);
 			u64 a64 = *((u64 *) (adata + 1));
 			h = (h << 9) ^ (h >> 23) ^ (uint32_t) (a64);
 			h = (h << 9) ^ (h >> 23) ^ (uint32_t) (a64 >> 32);
-			if (++part == part_count)
+			if (++part == x->part_count)
 				return h;
-			adata += 9;
+			adata = search_get_part(&x->a, part, adata + 1 + 8);
 		} else {
 			int asize = load_varint32((void**) &adata);
 			h = MurmurHash2(adata, asize, h);
-			if (++part == part_count)
+			if (++part == x->part_count)
 				return h;
-			adata += asize;
+			adata = search_get_part(&x->a, part, adata + asize);
 		}
-		adata = search_get_part(&x->a, part, adata);
 	}
 }
 
@@ -345,33 +337,28 @@ search_equal(struct search_helper *x,
 
 	/* Compare data part by part. */
 	assert(x->part_count > 0);
-	int part = 0, part_count = x->part_count;
-	const u8 *adata = search_get_part(&x->a, part, x->a.data);
-	const u8 *bdata = search_get_part(&x->b, part, x->b.data);
-	for (;;) {
+	const u8 *adata = search_get_part(&x->a, 0, NULL);
+	const u8 *bdata = search_get_part(&x->b, 0, NULL);
+	for (int part = 0;;) {
 		assert(x->a.parts[part].type == x->b.parts[part].type);
 		if (x->a.parts[part].type == NUM) {
 			assert(*adata == 4);
 			assert(*bdata == 4);
-			u32 a32 = *((u32 *) (adata + 1));
-			u32 b32 = *((u32 *) (bdata + 1));
-			if (a32 != b32)
+			if (*((u32 *) (adata + 1)) != *((u32 *) (bdata + 1)))
 				return 0;
-			if (++part == part_count)
+			if (++part == x->part_count)
 				return 1;
-			adata += 5;
-			bdata += 5;
+			adata = search_get_part(&x->a, part, adata + 1 + 4);
+			bdata = search_get_part(&x->b, part, bdata + 1 + 4);
 		} else if (x->a.parts[part].type == NUM64) {
 			assert(*adata == 8);
 			assert(*bdata == 8);
-			u32 a64 = *((u64 *) (adata + 1));
-			u32 b64 = *((u64 *) (bdata + 1));
-			if (a64 != b64)
+			if (*((u64 *) (adata + 1)) != *((u64 *) (bdata + 1)))
 				return 0;
-			if (++part == part_count)
+			if (++part == x->part_count)
 				return 1;
-			adata += 9;
-			bdata += 9;
+			adata = search_get_part(&x->a, part, adata + 1 + 8);
+			bdata = search_get_part(&x->b, part, bdata + 1 + 8);
 		} else {
 			int asize = load_varint32((void**) &adata);
 			int bsize = load_varint32((void**) &bdata);
@@ -379,13 +366,11 @@ search_equal(struct search_helper *x,
 				return 0;
 			if (memcmp(adata, bdata, asize) != 0)
 				return 0;
-			if (++part == part_count)
+			if (++part == x->part_count)
 				return 1;
-			adata += asize;
-			bdata += asize;
+			adata = search_get_part(&x->a, part, adata + asize);
+			bdata = search_get_part(&x->b, part, bdata + asize);
 		}
-		adata = search_get_part(&x->a, part, adata);
-		bdata = search_get_part(&x->b, part, bdata);
 	}
 }
 
@@ -410,29 +395,28 @@ search_compare(struct search_helper *x,
 
 	/* Compare data part by part. */
 	assert(x->part_count > 0);
-	int part = 0, part_count = x->part_count;
-	const u8 *adata = search_get_part(&x->a, part, x->a.data);
-	const u8 *bdata = search_get_part(&x->b, part, x->b.data);
-	for (;;) {
+	const u8 *adata = search_get_part(&x->a, 0, NULL);
+	const u8 *bdata = search_get_part(&x->b, 0, NULL);
+	for (int part = 0;;) {
 		assert(x->a.parts[part].type == x->b.parts[part].type);
 		if (x->a.parts[part].type == NUM) {
 			assert(*adata == 4);
 			assert(*bdata == 4);
 			int r = u32_cmp(*((u32 *) (adata + 1)),
 					*((u32 *) (bdata + 1)));
-			if (r || ++part == part_count)
+			if (r || ++part == x->part_count)
 				return r;
-			adata += 5;
-			bdata += 5;
+			adata = search_get_part(&x->a, part, adata + 1 + 4);
+			bdata = search_get_part(&x->b, part, bdata + 1 + 4);
 		} else if (x->a.parts[part].type == NUM64) {
 			assert(*adata == 8);
 			assert(*bdata == 8);
 			int r = u64_cmp(*((u64 *) (adata + 1)),
 					*((u64 *) (bdata + 1)));
-			if (r || ++part == part_count)
+			if (r || ++part == x->part_count)
 				return r;
-			adata += 9;
-			bdata += 9;
+			adata = search_get_part(&x->a, part, adata + 1 + 8);
+			bdata = search_get_part(&x->b, part, bdata + 1 + 8);
 		} else {
 			int asize = load_varint32((void**) &adata);
 			int bsize = load_varint32((void**) &bdata);
@@ -442,16 +426,13 @@ search_compare(struct search_helper *x,
 			} else if (asize > bsize) {
 				int r = memcmp(adata, bdata, bsize);
 				return r ? r : +1;
-			} else {
-				int r = memcmp(adata, bdata, asize);
-				if (r || ++part == part_count)
-					return r;
-				adata += asize;
-				bdata += asize;
-			}
+			} 
+			int r = memcmp(adata, bdata, asize);
+			if (r || ++part == x->part_count)
+				return r;
+			adata = search_get_part(&x->a, part, adata + asize);
+			bdata = search_get_part(&x->b, part, bdata + asize);
 		}
-		adata = search_get_part(&x->a, part, adata);
-		bdata = search_get_part(&x->b, part, bdata);
 	}
 }
 
@@ -657,18 +638,17 @@ SPTREE_DEF(index, realloc);
 		if (key_parts == NULL)
 			panic("malloc(): failed to allocate %"PRI_SZ" bytes", sz);
 
-		sz = sizeof(struct field_desc) * key_def->part_count;
-		key_field_desc = malloc(sz);
-		if (key_field_desc == NULL)
-			panic("malloc(): failed to allocate %"PRI_SZ" bytes", sz);
-
 		for (int i = 0; i < key_def->part_count; i++) {
 			key_parts[i].type = key_def->parts[i].type;
 			key_parts[i].fieldno = i;
-
-			key_field_desc[i].type = key_def->parts[i].type;
-			key_field_desc[i].base = -1;
-			key_field_desc[i].disp = 0;
+			if (i == 0) {
+				key_parts[i].offset_code = DISP_ONLY;
+				key_parts[i].base = 0;
+			} else {
+				key_parts[i].offset_code = NEXT_FIELD;
+				key_parts[i].base = -1;
+			}
+			key_parts[i].disp = 0;
 		}
 
 		/* Initialize common search helper. */
@@ -699,7 +679,6 @@ SPTREE_DEF(index, realloc);
 	}
 
 	free(key_parts);
-	free(key_field_desc);
 	[super free];
 }
 

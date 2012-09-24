@@ -317,8 +317,8 @@ space_init_key_info(struct space *space)
 	 * Gather agregate key info.
 	 *
 	 * For every field that is a part of any key in the space fugure
-	 * out and record how it can be accessed efficiently that is
-	 * without scanning over fields not used in the index.
+	 * out and record how it can be accessed without extra scanning
+	 * over the fields that do not belong to the index.
 	 */
 
 	/* The first field of the tuple always has known offset of 0 from
@@ -395,35 +395,51 @@ space_init_key_info(struct space *space)
 		 space_n(space), space->base_count);
 
 	/*
-	 * Gather individual key info.
-	 *
-	 * Check to See if the key field access requires temporary offset
-	 * table. This is the case for keys with non-linear field order.
+	 * Gather individual key info:
 	 */
 
 	for (int k = 0; k < space->key_count; k++) {
 		struct key_def *d = &space->key_defs[k];
+		int p;
 
+		/* Check to see if the key field access requires temporary
+		   offset table. This is the case for keys with non-linear
+		   field order. */
 		bool needs_offset_table = false;
-		for (int p = 0; p < d->part_count; p++) {
+		for (p = 0; p < d->part_count; p++) {
 			int f = d->parts[p].fieldno;
-			if (space->field_desc[f].base >= 0) {
+			if (space->field_desc[f].base >= 0)
 				continue;
-			}
 
 			if (p == 0) {
 				needs_offset_table = true;
 				break;
 			}
-
-			int prev_f = d->parts[p - 1].fieldno;
-			if ((prev_f + 1) != f) {
+			if (f != (d->parts[p - 1].fieldno + 1)) {
 				needs_offset_table = true;
 				break;
 			}
 		}
 
 		d->needs_offset_table = needs_offset_table;
+
+		/* Set key part offset info. */
+		for (p = 0; p < d->part_count; p++) {
+			int f = d->parts[p].fieldno;
+
+			d->parts[p].base = space->field_desc[f].base;
+			d->parts[p].disp = space->field_desc[f].disp;
+
+			if (d->parts[p].base == 0)
+				d->parts[p].offset_code = DISP_ONLY;
+			else if (d->needs_offset_table)
+				d->parts[p].offset_code = OFFSET_TABLE;
+			else if (d->parts[p].base > 0)
+				d->parts[p].offset_code = BASE_DISP;
+			else
+				d->parts[p].offset_code = NEXT_FIELD;
+		}
+
 	}
 }
 

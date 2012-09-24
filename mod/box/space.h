@@ -51,10 +51,29 @@ extern const char *index_type_strs[];
 enum field_data_type { UNKNOWN = -1, NUM = 0, NUM64, STRING, field_data_type_MAX };
 extern const char *field_data_type_strs[];
 
-/** Descriptor of a single part in a multipart key. */
+/*
+ * Possible key part access methods.
+ */
+enum offset_code { BASE_DISP, DISP_ONLY, OFFSET_TABLE, NEXT_FIELD };
+
+/**
+ * Descriptor of a single part in a multipart key.
+ *
+ * The "base" and "disp" fields duplicate the fields from the
+ * corresponding space field_desc[key_part->fieldno] entry.
+ * These redundant copies simplify a bit the data access in
+ * the index search code path.
+ */
 struct key_part {
-	int fieldno;
 	enum field_data_type type;
+	enum offset_code offset_code;
+
+	int fieldno;
+
+	/** Field base offset. */
+	i32 base;
+	/** Field displacement. */
+	u32 disp;
 };
 
 /** Descriptor of key part data layout. */
