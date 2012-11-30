@@ -340,6 +340,8 @@ space_config()
 		space = calloc(sizeof(struct space), 1);
 		space->no = i;
 
+		space->temp = cfg_space->temp;
+
 		space->arity = cfg_space->cardinality;
 		/*
 		 * Collect key/field info. We need aggregate

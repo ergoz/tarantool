@@ -1,0 +1,15 @@
+# encoding: tarantool
+
+exec admin "lua box.insert(21, 1, 2, 3)"
+exec admin "lua box.select(21, 0, 1)"
+server.restart()
+print "server was restarted"
+exec admin "lua box.select(21, 0, 1)"
+exec admin "lua box.insert(21, 1, 2, 3)"
+exec admin "lua box.select(21, 0, 1)"
+exec admin "lua box.insert(15, box.uuid_hex()) ~= nil"
+exec admin "save snapshot"
+server.restart()
+print "server was restarted"
+exec admin "lua box.select(21, 0, 1)"
+

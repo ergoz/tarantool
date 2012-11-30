@@ -131,6 +131,7 @@ swap_tarantool_cfg(struct tarantool_cfg *c1, struct tarantool_cfg *c2) {
 static int
 acceptDefault_name__space(tarantool_cfg_space *c) {
 	c->enabled = -1;
+	c->temp = false;
 	c->cardinality = -1;
 	c->estimated_rows = 0;
 	c->index = NULL;
@@ -274,6 +275,10 @@ static NameAtom _name__space[] = {
 static NameAtom _name__space__enabled[] = {
 	{ "space", -1, _name__space__enabled + 1 },
 	{ "enabled", -1, NULL }
+};
+static NameAtom _name__space__temp[] = {
+	{ "space", -1, _name__space__temp + 1 },
+	{ "temp", -1, NULL }
 };
 static NameAtom _name__space__cardinality[] = {
 	{ "space", -1, _name__space__cardinality + 1 },
@@ -920,6 +925,35 @@ acceptValue(tarantool_cfg* c, OptDef* opt, int check_rdonly) {
 			return CNF_RDONLY;
 		c->space[opt->name->index]->enabled = bln;
 	}
+	else if ( cmpNameAtoms( opt->name, _name__space__temp) ) {
+		if (opt->paramType != scalarType )
+			return CNF_WRONGTYPE;
+		ARRAYALLOC(c->space, opt->name->index + 1, _name__space, check_rdonly, CNF_FLAG_STRUCT_NEW | CNF_FLAG_STRUCT_NOTSET);
+		if (c->space[opt->name->index]->__confetti_flags & CNF_FLAG_STRUCT_NEW)
+			check_rdonly = 0;
+		c->space[opt->name->index]->__confetti_flags &= ~CNF_FLAG_STRUCT_NOTSET;
+		c->space[opt->name->index]->__confetti_flags &= ~CNF_FLAG_STRUCT_NOTSET;
+		errno = 0;
+		bool bln;
+
+		if (strcasecmp(opt->paramValue.scalarval, "true") == 0 ||
+				strcasecmp(opt->paramValue.scalarval, "yes") == 0 ||
+				strcasecmp(opt->paramValue.scalarval, "enable") == 0 ||
+				strcasecmp(opt->paramValue.scalarval, "on") == 0 ||
+				strcasecmp(opt->paramValue.scalarval, "1") == 0 )
+			bln = true;
+		else if (strcasecmp(opt->paramValue.scalarval, "false") == 0 ||
+				strcasecmp(opt->paramValue.scalarval, "no") == 0 ||
+				strcasecmp(opt->paramValue.scalarval, "disable") == 0 ||
+				strcasecmp(opt->paramValue.scalarval, "off") == 0 ||
+				strcasecmp(opt->paramValue.scalarval, "0") == 0 )
+			bln = false;
+		else
+			return CNF_WRONGRANGE;
+		if (check_rdonly && c->space[opt->name->index]->temp != bln)
+			return CNF_RDONLY;
+		c->space[opt->name->index]->temp = bln;
+	}
 	else if ( cmpNameAtoms( opt->name, _name__space__cardinality) ) {
 		if (opt->paramType != scalarType )
 			return CNF_WRONGTYPE;
@@ -1237,6 +1271,7 @@ typedef enum IteratorState {
 	S_name__replication_source,
 	S_name__space,
 	S_name__space__enabled,
+	S_name__space__temp,
 	S_name__space__cardinality,
 	S_name__space__estimated_rows,
 	S_name__space__index,
@@ -1682,6 +1717,7 @@ again:
 		case S_name__space:
 			i->state = S_name__space;
 		case S_name__space__enabled:
+		case S_name__space__temp:
 		case S_name__space__cardinality:
 		case S_name__space__estimated_rows:
 		case S_name__space__index:
@@ -1702,6 +1738,17 @@ again:
 						}
 						sprintf(*v, "%s", c->space[i->idx_name__space]->enabled == -1 ? "false" : c->space[i->idx_name__space]->enabled ? "true" : "false");
 						snprintf(buf, PRINTBUFLEN-1, "space[%d].enabled", i->idx_name__space);
+						i->state = S_name__space__temp;
+						return buf;
+					case S_name__space__temp:
+						*v = malloc(8);
+						if (*v == NULL) {
+							free(i);
+							out_warning(CNF_NOMEMORY, "No memory to output value");
+							return NULL;
+						}
+						sprintf(*v, "%s", c->space[i->idx_name__space]->temp ? "true" : "false");
+						snprintf(buf, PRINTBUFLEN-1, "space[%d].temp", i->idx_name__space);
 						i->state = S_name__space__cardinality;
 						return buf;
 					case S_name__space__cardinality:
@@ -2026,6 +2073,7 @@ dup_tarantool_cfg(tarantool_cfg* dst, tarantool_cfg* src) {
 
 			dst->space[i->idx_name__space]->__confetti_flags = src->space[i->idx_name__space]->__confetti_flags;
 			dst->space[i->idx_name__space]->enabled = src->space[i->idx_name__space]->enabled;
+			dst->space[i->idx_name__space]->temp = src->space[i->idx_name__space]->temp;
 			dst->space[i->idx_name__space]->cardinality = src->space[i->idx_name__space]->cardinality;
 			dst->space[i->idx_name__space]->estimated_rows = src->space[i->idx_name__space]->estimated_rows;
 
@@ -2377,6 +2425,11 @@ cmp_tarantool_cfg(tarantool_cfg* c1, tarantool_cfg* c2, int only_check_rdonly) {
 	while (c1->space != NULL && c1->space[i1->idx_name__space] != NULL && c2->space != NULL && c2->space[i2->idx_name__space] != NULL) {
 		if (c1->space[i1->idx_name__space]->enabled != c2->space[i2->idx_name__space]->enabled) {
 			snprintf(diff, PRINTBUFLEN - 1, "%s", "c->space[]->enabled");
+
+			return diff;
+		}
+		if (c1->space[i1->idx_name__space]->temp != c2->space[i2->idx_name__space]->temp) {
+			snprintf(diff, PRINTBUFLEN - 1, "%s", "c->space[]->temp");
 
 			return diff;
 		}

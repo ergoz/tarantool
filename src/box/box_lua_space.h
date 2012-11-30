@@ -32,6 +32,5 @@ struct lua_State;
 struct space;
 
 int lbox_pushspace(struct lua_State *L, struct space *space);
-void lbox_space_init(struct lua_State *L);
 
 #endif /* INCLUDES_TARANTOOL_LUA_SPACE_H */

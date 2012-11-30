@@ -32,6 +32,7 @@ typedef struct tarantool_cfg_space {
 	unsigned char __confetti_flags;
 
 	confetti_bool_t	enabled;
+	confetti_bool_t	temp;
 	int32_t	cardinality;
 	int32_t	estimated_rows;
 	tarantool_cfg_space_index**	index;

@@ -79,6 +79,9 @@ struct space {
 
 	/** Space number. */
 	i32 no;
+
+	/** Space is itemporary (won't be saved to WAL and snapshot) */
+	bool temp;
 };
 
 

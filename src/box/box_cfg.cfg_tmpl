@@ -35,6 +35,7 @@ replication_source=NULL
 space = [
   {
     enabled = false, required
+    temp = false
     cardinality = -1
     estimated_rows = 0
     index = [

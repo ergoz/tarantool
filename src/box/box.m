@@ -509,6 +509,8 @@ snapshot_write_tuple(struct log_io *l, struct fio_batch *batch,
 static void
 snapshot_space(struct space *sp, void *udata)
 {
+	if (sp->temp)
+		return;
 	struct tuple *tuple;
 	struct { struct log_io *l; struct fio_batch *batch; } *ud = udata;
 	Index *pk = space_index(sp, 0);

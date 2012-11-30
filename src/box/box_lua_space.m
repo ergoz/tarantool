@@ -65,6 +65,11 @@ lbox_pushspace(struct lua_State *L, struct space *space)
 	lua_pushnumber(L, 0);
 	lua_settable(L, -3);
 
+	/* temporary space */
+	lua_pushstring(L, "temp");
+	lua_pushboolean(L, space->temp);
+	lua_settable(L, -3);
+
 	/* space.index */
 	lua_pushstring(L, "index");
 	lua_newtable(L);

@@ -1,0 +1,32 @@
+lua box.insert(21, 1, 2, 3)
+---
+ - 1: {2, 3}
+...
+lua box.select(21, 0, 1)
+---
+ - 1: {2, 3}
+...
+server was restarted
+lua box.select(21, 0, 1)
+---
+...
+lua box.insert(21, 1, 2, 3)
+---
+ - 1: {2, 3}
+...
+lua box.select(21, 0, 1)
+---
+ - 1: {2, 3}
+...
+lua box.insert(15, box.uuid_hex()) ~= nil
+---
+ - true
+...
+save snapshot
+---
+ok
+...
+server was restarted
+lua box.select(21, 0, 1)
+---
+...
