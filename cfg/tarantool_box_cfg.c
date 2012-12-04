@@ -133,6 +133,7 @@ acceptDefault_name__space(tarantool_cfg_space *c) {
 	c->enabled = -1;
 	c->cardinality = -1;
 	c->estimated_rows = 0;
+	c->prereplace_trigger = NULL;
 	c->index = NULL;
 	return 0;
 }
@@ -282,6 +283,10 @@ static NameAtom _name__space__cardinality[] = {
 static NameAtom _name__space__estimated_rows[] = {
 	{ "space", -1, _name__space__estimated_rows + 1 },
 	{ "estimated_rows", -1, NULL }
+};
+static NameAtom _name__space__prereplace_trigger[] = {
+	{ "space", -1, _name__space__prereplace_trigger + 1 },
+	{ "prereplace_trigger", -1, NULL }
 };
 static NameAtom _name__space__index[] = {
 	{ "space", -1, _name__space__index + 1 },
@@ -956,6 +961,22 @@ acceptValue(tarantool_cfg* c, OptDef* opt, int check_rdonly) {
 			return CNF_RDONLY;
 		c->space[opt->name->index]->estimated_rows = i32;
 	}
+	else if ( cmpNameAtoms( opt->name, _name__space__prereplace_trigger) ) {
+		if (opt->paramType != scalarType )
+			return CNF_WRONGTYPE;
+		ARRAYALLOC(c->space, opt->name->index + 1, _name__space, check_rdonly, CNF_FLAG_STRUCT_NEW | CNF_FLAG_STRUCT_NOTSET);
+		if (c->space[opt->name->index]->__confetti_flags & CNF_FLAG_STRUCT_NEW)
+			check_rdonly = 0;
+		c->space[opt->name->index]->__confetti_flags &= ~CNF_FLAG_STRUCT_NOTSET;
+		c->space[opt->name->index]->__confetti_flags &= ~CNF_FLAG_STRUCT_NOTSET;
+		errno = 0;
+		if (check_rdonly && ( (opt->paramValue.scalarval == NULL && c->space[opt->name->index]->prereplace_trigger == NULL) || strcmp(opt->paramValue.scalarval, c->space[opt->name->index]->prereplace_trigger) != 0))
+			return CNF_RDONLY;
+		 if (c->space[opt->name->index]->prereplace_trigger) free(c->space[opt->name->index]->prereplace_trigger);
+		c->space[opt->name->index]->prereplace_trigger = (opt->paramValue.scalarval) ? strdup(opt->paramValue.scalarval) : NULL;
+		if (opt->paramValue.scalarval && c->space[opt->name->index]->prereplace_trigger == NULL)
+			return CNF_NOMEMORY;
+	}
 	else if ( cmpNameAtoms( opt->name, _name__space__index) ) {
 		if (opt->paramType != arrayType )
 			return CNF_WRONGTYPE;
@@ -1239,6 +1260,7 @@ typedef enum IteratorState {
 	S_name__space__enabled,
 	S_name__space__cardinality,
 	S_name__space__estimated_rows,
+	S_name__space__prereplace_trigger,
 	S_name__space__index,
 	S_name__space__index__type,
 	S_name__space__index__unique,
@@ -1684,6 +1706,7 @@ again:
 		case S_name__space__enabled:
 		case S_name__space__cardinality:
 		case S_name__space__estimated_rows:
+		case S_name__space__prereplace_trigger:
 		case S_name__space__index:
 		case S_name__space__index__type:
 		case S_name__space__index__unique:
@@ -1724,6 +1747,16 @@ again:
 						}
 						sprintf(*v, "%"PRId32, c->space[i->idx_name__space]->estimated_rows);
 						snprintf(buf, PRINTBUFLEN-1, "space[%d].estimated_rows", i->idx_name__space);
+						i->state = S_name__space__prereplace_trigger;
+						return buf;
+					case S_name__space__prereplace_trigger:
+						*v = (c->space[i->idx_name__space]->prereplace_trigger) ? strdup(c->space[i->idx_name__space]->prereplace_trigger) : NULL;
+						if (*v == NULL && c->space[i->idx_name__space]->prereplace_trigger) {
+							free(i);
+							out_warning(CNF_NOMEMORY, "No memory to output value");
+							return NULL;
+						}
+						snprintf(buf, PRINTBUFLEN-1, "space[%d].prereplace_trigger", i->idx_name__space);
 						i->state = S_name__space__index;
 						return buf;
 					case S_name__space__index:
@@ -2028,6 +2061,9 @@ dup_tarantool_cfg(tarantool_cfg* dst, tarantool_cfg* src) {
 			dst->space[i->idx_name__space]->enabled = src->space[i->idx_name__space]->enabled;
 			dst->space[i->idx_name__space]->cardinality = src->space[i->idx_name__space]->cardinality;
 			dst->space[i->idx_name__space]->estimated_rows = src->space[i->idx_name__space]->estimated_rows;
+			if (dst->space[i->idx_name__space]->prereplace_trigger) free(dst->space[i->idx_name__space]->prereplace_trigger);dst->space[i->idx_name__space]->prereplace_trigger = src->space[i->idx_name__space]->prereplace_trigger == NULL ? NULL : strdup(src->space[i->idx_name__space]->prereplace_trigger);
+			if (src->space[i->idx_name__space]->prereplace_trigger != NULL && dst->space[i->idx_name__space]->prereplace_trigger == NULL)
+				return CNF_NOMEMORY;
 
 			dst->space[i->idx_name__space]->index = NULL;
 			if (src->space[i->idx_name__space]->index != NULL) {
@@ -2104,6 +2140,8 @@ destroy_tarantool_cfg(tarantool_cfg* c) {
 	if (c->space != NULL) {
 		i->idx_name__space = 0;
 		while (c->space[i->idx_name__space] != NULL) {
+			if (c->space[i->idx_name__space]->prereplace_trigger != NULL)
+				free(c->space[i->idx_name__space]->prereplace_trigger);
 
 			if (c->space[i->idx_name__space]->index != NULL) {
 				i->idx_name__space__index = 0;
@@ -2390,6 +2428,11 @@ cmp_tarantool_cfg(tarantool_cfg* c1, tarantool_cfg* c2, int only_check_rdonly) {
 
 			return diff;
 		}
+		if (confetti_strcmp(c1->space[i1->idx_name__space]->prereplace_trigger, c2->space[i2->idx_name__space]->prereplace_trigger) != 0) {
+			snprintf(diff, PRINTBUFLEN - 1, "%s", "c->space[]->prereplace_trigger");
+
+			return diff;
+}
 
 		i1->idx_name__space__index = 0;
 		i2->idx_name__space__index = 0;

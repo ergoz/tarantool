@@ -34,6 +34,7 @@ typedef struct tarantool_cfg_space {
 	confetti_bool_t	enabled;
 	int32_t	cardinality;
 	int32_t	estimated_rows;
+	char*	prereplace_trigger;
 	tarantool_cfg_space_index**	index;
 } tarantool_cfg_space;
 

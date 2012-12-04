@@ -39,6 +39,18 @@ enum {
 };
 
 struct space {
+
+	/** If set it will be called before space_replace.
+	  *	The method can raise exception
+	  */
+	void (*prereplace_trigger)(struct space *space,
+		struct tuple *old_tuple, struct tuple *new_tuple);
+
+	/** Name of lua procedure that is used as prereplace_trigger
+	  *
+	  */
+	const char *prereplace_trigger_name;
+
 	Index *index[BOX_INDEX_MAX];
 	/** If not set (is 0), any tuple in the
 	 * space can have any number of fields (but

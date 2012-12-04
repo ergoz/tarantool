@@ -1222,6 +1222,50 @@ box_lua_execute(struct request *request, struct port *port)
 	}
 }
 
+/** wrapper to call prereplace trigger that is written using lua
+ *
+ */
+void prereplace_lua_trigger(struct space *space,
+	struct tuple *old_tuple, struct tuple *new_tuple)
+{
+	assert (space->prereplace_trigger_name != NULL);
+	lua_State *L = lua_newthread(root_L);
+	int coro_ref = luaL_ref(root_L, LUA_REGISTRYINDEX);
+
+	@try {
+		/* stack: prereplace_trigger function */
+		box_lua_find(L,
+			space->prereplace_trigger_name,
+			space->prereplace_trigger_name +
+				strlen(space->prereplace_trigger_name));
+
+
+		lua_getfield(L, LUA_GLOBALSINDEX, "box");
+		lua_pushstring(L, "space");
+		lua_gettable(L, -2);
+		lua_replace(L, -2);
+
+		lua_pushnumber(L, space->no);
+		lua_gettable(L, -2);
+		lua_replace(L, -2);
+
+		lbox_pushtuple(L, old_tuple);
+		lbox_pushtuple(L, new_tuple);
+
+		/* stack: hook, space, old_tuple, new_tuple */
+		lua_call(L, 3, 0);
+
+	} @catch(tnt_Exception *e) {
+		@throw;
+	} @catch(...) {
+		tnt_raise(ClientError, :ER_PROC_LUA, lua_tostring(L, -1));
+
+	} @finally {
+		luaL_unref(root_L, LUA_REGISTRYINDEX, coro_ref);
+	}
+}
+
+
 static void
 box_index_init_iterator_types(struct lua_State *L, int idx)
 {

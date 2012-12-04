@@ -37,6 +37,7 @@
 #include <pickle.h>
 #include <palloc.h>
 #include <assoc.h>
+#include "box_lua.h"
 
 static struct mh_i32ptr_t *spaces;
 
@@ -135,6 +136,9 @@ void
 space_validate(struct space *sp, struct tuple *old_tuple,
 	       struct tuple *new_tuple)
 {
+	if (sp->prereplace_trigger)
+		sp->prereplace_trigger(sp, old_tuple, new_tuple);
+
 	int n = index_count(sp);
 
 	/* Only secondary indexes are validated here. So check to see
@@ -351,6 +355,11 @@ space_config()
 			++space->key_count;
 		}
 
+		if (cfg_space->prereplace_trigger) {
+			space->prereplace_trigger_name =
+				cfg_space->prereplace_trigger;
+			space->prereplace_trigger = prereplace_lua_trigger;
+		}
 
 		space->key_defs = malloc(space->key_count *
 					    sizeof(struct key_def));

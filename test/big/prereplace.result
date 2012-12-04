@@ -1,0 +1,55 @@
+lua dofile('prereplace.lua')
+---
+...
+lua box.insert(21, 'a', 'b', 'c')
+---
+ - 'a': {'b', 'c'}
+...
+lua box.insert(21, 'c', 'd', 'e')
+---
+ - 'c': {'d', 'e'}
+...
+lua box.select(21, 0, 'a')
+---
+ - 'a': {'b', 'c'}
+...
+lua box.select(21, 0, 'c')
+---
+ - 'c': {'d', 'e'}
+...
+lua box.prereplace_lua_test_trigger_behaviour = 'error'
+---
+...
+lua box.insert(21, 'f', 'g', 'h')
+---
+error: 'Lua error: prereplace.lua:5: space[21].prereplace_trigger(nil, userdata)'
+...
+lua box.select(21, 0, 'f')
+---
+...
+lua box.prereplace_lua_test_trigger_behaviour = 'oldtuple'
+---
+...
+lua box.insert(21, 'f', 'g', 'h')
+---
+ - 'f': {'g', 'h'}
+...
+lua box.insert(21, 'a', 'c', 'h')
+---
+error: 'Tuple already exists'
+...
+lua box.replace(21, 'a', 'c', 'h')
+---
+error: 'Lua error: prereplace.lua:14: dont replace the tuple!'
+...
+lua box.prereplace_lua_test_trigger_behaviour = 'insert'
+---
+...
+lua box.replace(21, 'a', 'c', 'h')
+---
+ - 'a': {'c', 'h'}
+...
+lua box.insert(21, 'i', 'j', 'k')
+---
+error: 'Lua error: prereplace.lua:20: dont insert the tuple!'
+...

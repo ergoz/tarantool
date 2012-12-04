@@ -1,0 +1,29 @@
+# encoding: tarantool
+
+import os
+import shutil
+
+prepreplace_lua_path = os.path.join(vardir, "prereplace.lua")
+shutil.copy("big/prereplace.lua", prepreplace_lua_path)
+
+exec admin "lua dofile('prereplace.lua')"
+shutil.rmtree(prepreplace_lua_path, True)
+
+
+exec admin "lua box.insert(21, 'a', 'b', 'c')"
+exec admin "lua box.insert(21, 'c', 'd', 'e')"
+exec admin "lua box.select(21, 0, 'a')"
+exec admin "lua box.select(21, 0, 'c')"
+
+exec admin "lua box.prereplace_lua_test_trigger_behaviour = 'error'"
+exec admin "lua box.insert(21, 'f', 'g', 'h')"
+exec admin "lua box.select(21, 0, 'f')"
+
+exec admin "lua box.prereplace_lua_test_trigger_behaviour = 'oldtuple'"
+exec admin "lua box.insert(21, 'f', 'g', 'h')"
+exec admin "lua box.insert(21, 'a', 'c', 'h')"
+exec admin "lua box.replace(21, 'a', 'c', 'h')"
+
+exec admin "lua box.prereplace_lua_test_trigger_behaviour = 'insert'"
+exec admin "lua box.replace(21, 'a', 'c', 'h')"
+exec admin "lua box.insert(21, 'i', 'j', 'k')"

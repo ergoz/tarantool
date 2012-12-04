@@ -30,6 +30,7 @@
  */
 #include "request.h"
 struct lua_State;
+struct space;
 
 /**
  * Invoke a Lua stored procedure from the binary protocol
@@ -44,4 +45,8 @@ box_lua_execute(struct request *request, struct port *port);
 void box_lua_init();
 
 struct tuple *lua_istuple(struct lua_State *L, int narg);
+
+void prereplace_lua_trigger(struct space *space,
+	struct tuple *old_tuple, struct tuple *new_tuple);
+
 #endif /* INCLUDES_TARANTOOL_MOD_BOX_LUA_H */

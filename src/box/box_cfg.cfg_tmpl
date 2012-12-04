@@ -37,6 +37,7 @@ space = [
     enabled = false, required
     cardinality = -1
     estimated_rows = 0
+    prereplace_trigger = NULL
     index = [
       {
         type = "", required
