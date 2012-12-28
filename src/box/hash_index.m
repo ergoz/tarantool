@@ -26,10 +26,11 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+#include <time.h>
+
 #include "hash_index.h"
 #include "say.h"
 #include "tuple.h"
-#include "pickle.h"
 #include "exception.h"
 #include "space.h"
 #include "assoc.h"
@@ -39,126 +40,113 @@ static struct index_traits hash_index_traits = {
 	.allows_partial_key = false,
 };
 
+@class HashIndex;
+static inline u32
+hash_hash(HashIndex *self, const void *node)
+{
+	return node_hash(&self->fmtdef, node);
+}
+
+static inline bool
+hash_eq(HashIndex *self, const void *node_a, const void *node_b)
+{
+	return (node_compare(&self->fmtdef, node_a, node_b) == 0);
+}
+
+/*
+ * Called only if update operation is invoked (put, delete, replace, remove)
+ * and hash_eq returned true
+ */
+static inline bool
+hash_eq_exact(HashIndex *self, const void *node_a, const void *node_b)
+{
+	if (self->key_def->is_unique)
+		return true;
+
+	return (node_compare_addr(&self->fmtdef, node_a, node_b) == 0);
+}
+
+#define mh_name _index
+#define mh_node_t void *
+#define mh_int_t u32
+#define mh_hash_arg_t HashIndex *
+#define mh_hash(a, arg) (hash_hash(arg, *(a)))
+#define mh_eq_arg_t HashIndex *
+#define mh_eq(a, b, arg) (hash_eq(arg, *(a), *(b)))
+#define mh_eq_exact(a, b, arg) (hash_eq_exact(arg, *(a), *(b)))
+#define TEST
+#define MH_SOURCE 1
+#include <mhash.h>
+#undef TEST
+
 /* {{{ HashIndex Iterators ****************************************/
 
-struct hash_i32_iterator {
+struct hash_iterator {
 	struct iterator base; /* Must be the first member. */
-	struct mh_i32ptr_t *hash;
-	mh_int_t h_pos;
-};
-
-struct hash_i64_iterator {
-	struct iterator base;
-	struct mh_i64ptr_t *hash;
-	mh_int_t h_pos;
-};
-
-struct hash_lstr_iterator {
-	struct iterator base;
-	struct mh_lstrptr_t *hash;
+	HashIndex *index;
+	struct mh_index_iterator it;
+	void *key_node;
+	size_t key_node_size;
 	mh_int_t h_pos;
 };
 
 void
-hash_iterator_free(struct iterator *iterator)
-{
-	assert(iterator->free == hash_iterator_free);
-	free(iterator);
-}
-
-struct tuple *
-hash_iterator_i32_ge(struct iterator *ptr)
+hash_iterator_free(struct iterator *ptr)
 {
 	assert(ptr->free == hash_iterator_free);
-	struct hash_i32_iterator *it = (struct hash_i32_iterator *) ptr;
+	struct hash_iterator *it = (struct hash_iterator *) ptr;
+	index_realloc(it->key_node, 0, "iterator_key");
+}
 
-	while (it->h_pos < mh_end(it->hash)) {
-		if (mh_exist(it->hash, it->h_pos))
-			return mh_i32ptr_node(it->hash, it->h_pos++)->val;
-		it->h_pos++;
+static struct tuple *
+hash_iterator_next(struct iterator *ptr)
+{
+	assert(ptr->free == hash_iterator_free);
+	struct hash_iterator *it = (struct hash_iterator *) ptr;
+
+	mh_int_t k = mh_index_iterator_next(&it->it);
+
+	if (k != mh_end(it->it.h)) {
+		void *node = *mh_index_node(it->it.h, k);
+		return node_unfold(&it->index->fmtdef, node);
 	}
+
 	return NULL;
 }
 
 struct tuple *
-hash_iterator_i64_ge(struct iterator *ptr)
+hash_iterator_test_ge(struct iterator *ptr)
 {
 	assert(ptr->free == hash_iterator_free);
-	struct hash_i64_iterator *it = (struct hash_i64_iterator *) ptr;
+	struct hash_iterator *it = (struct hash_iterator *) ptr;
 
-	while (it->h_pos < mh_end(it->hash)) {
-		if (mh_exist(it->hash, it->h_pos))
-			return mh_i64ptr_node(it->hash, it->h_pos++)->val;
-		it->h_pos++;
-	}
-	return NULL;
-}
-
-struct tuple *
-hash_iterator_lstr_ge(struct iterator *ptr)
-{
-	assert(ptr->free == hash_iterator_free);
-	struct hash_lstr_iterator *it = (struct hash_lstr_iterator *) ptr;
-
-	while (it->h_pos < mh_end(it->hash)) {
-		if (mh_exist(it->hash, it->h_pos))
-			return mh_lstrptr_node(it->hash, it->h_pos++)->val;
+	while (it->h_pos < mh_end(it->it.h)) {
+		if (mh_exist(it->it.h, it->h_pos)) {
+			void *node = *mh_index_node(it->it.h, it->h_pos++);
+			return node_unfold(&it->index->fmtdef, node);
+		}
 		it->h_pos++;
 	}
 	return NULL;
 }
 
 static struct tuple *
-hash_iterator_eq_next(struct iterator *it __attribute__((unused)))
+hash_iterator_test_next(struct iterator *it __attribute__((unused)))
 {
 	return NULL;
 }
 
 static struct tuple *
-hash_iterator_i32_eq(struct iterator *it)
+hash_iterator_test_eq(struct iterator *it)
 {
-	it->next = hash_iterator_eq_next;
-	return hash_iterator_i32_ge(it);
+	it->next = hash_iterator_test_next;
+	return hash_iterator_test_ge(it);
 }
 
-static struct tuple *
-hash_iterator_i64_eq(struct iterator *it)
-{
-	it->next = hash_iterator_eq_next;
-	return hash_iterator_i64_ge(it);
-}
-
-static struct tuple *
-hash_iterator_lstr_eq(struct iterator *it)
-{
-	it->next = hash_iterator_eq_next;
-	return hash_iterator_lstr_ge(it);
-}
 
 /* }}} */
 
 /* {{{ HashIndex -- base class for all hashes. ********************/
-
-@interface Hash32Index: HashIndex {
-	 struct mh_i32ptr_t *int_hash;
-};
-
-- (id) init: (struct key_def *) key_def_arg :(struct space *) space_arg;
-@end
-
-@interface Hash64Index: HashIndex {
-	struct mh_i64ptr_t *int64_hash;
-};
-
-- (id) init: (struct key_def *) key_def_arg :(struct space *) space_arg;
-@end
-
-@interface HashStrIndex: HashIndex {
-	struct mh_lstrptr_t *str_hash;
-};
-
-- (id) init: (struct key_def *) key_def_arg :(struct space *) space_arg;
-@end
 
 @implementation HashIndex
 
@@ -167,29 +155,40 @@ hash_iterator_lstr_eq(struct iterator *it)
 	return &hash_index_traits;
 }
 
-+ (HashIndex *) alloc: (struct key_def *) key_def :(struct space *) space
+- (id) init: (struct key_def *) key_def_arg :(struct space *) space_arg
 {
-	(void) space;
+	self = [super init: key_def_arg :space_arg];
 
-	/*
-	 * Hash index always has a single-field key.
-	 */
-	switch (key_def->parts[0].type) {
-	case NUM:
-		return [Hash32Index alloc];  /* 32-bit integer hash */
-	case NUM64:
-		return [Hash64Index alloc];  /* 64-bit integer hash */
-	case STRING:
-		return [HashStrIndex alloc]; /* string hash */
-	default:
-		assert(false);
+	if (self == NULL)
+		return NULL;
+
+	node_format_init(&fmtdef, space_arg, key_def_arg);
+	tmp_node_size = 0;
+	tmp_node = NULL;
+
+	hash = mh_index_init();
+
+	return self;
+}
+
+- (void) free
+{
+	mh_int_t k;
+	mh_foreach(hash, k) {
+		void *node = *mh_index_node(hash, k);
+		index_realloc(node, 0, "node");
 	}
+
+	node_format_deinit(&fmtdef);
+	mh_index_destroy(hash);
+	index_realloc(tmp_node, 0, "key");
+	tmp_node_size = 0;
+	[super free];
 }
 
 - (void) reserve: (u32) n_tuples
 {
-	(void) n_tuples;
-	[self subclassResponsibility: _cmd];
+	mh_index_reserve(hash, n_tuples, self, self);
 }
 
 - (void) beginBuild
@@ -225,11 +224,6 @@ hash_iterator_lstr_eq(struct iterator *it)
 	      [self replace: NULL :tuple :DUP_INSERT];
 }
 
-- (void) free
-{
-	[super free];
-}
-
 - (struct tuple *) min
 {
 	tnt_raise(ClientError, :ER_UNSUPPORTED, "Hash index", "min()");
@@ -242,58 +236,10 @@ hash_iterator_lstr_eq(struct iterator *it)
 	return NULL;
 }
 
-@end
-
-/* }}} */
-
-/* {{{ Hash32Index ************************************************/
-
-static inline struct mh_i32ptr_node_t
-int32_key_to_node(void *key)
-{
-	u32 key_size = load_varint32(&key);
-	if (key_size != 4)
-		tnt_raise(ClientError, :ER_KEY_FIELD_TYPE, "u32");
-	struct mh_i32ptr_node_t node = { .key = *(u32 *) key };
-	return node;
-}
-
-static inline struct mh_i32ptr_node_t
-int32_tuple_to_node(struct tuple *tuple, struct key_def *key_def)
-{
-	void *field = tuple_field(tuple, key_def->parts[0].fieldno);
-	struct mh_i32ptr_node_t node = int32_key_to_node(field);
-	node.val = tuple;
-	return node;
-}
-
-@implementation Hash32Index
-
-- (void) reserve: (u32) n_tuples
-{
-	mh_i32ptr_reserve(int_hash, n_tuples, NULL, NULL);
-}
-
-- (void) free
-{
-	mh_i32ptr_destroy(int_hash);
-	[super free];
-}
-
-- (id) init: (struct key_def *) key_def_arg :(struct space *) space_arg
-{
-	self = [super init: key_def_arg :space_arg];
-
-	if (self == NULL)
-		return NULL;
-
-	int_hash = mh_i32ptr_init();
-	return self;
-}
 
 - (size_t) size
 {
-	return mh_size(int_hash);
+	return mh_size(hash);
 }
 
 - (struct tuple *) findByKey: (void *) key :(int) part_count
@@ -301,441 +247,163 @@ int32_tuple_to_node(struct tuple *tuple, struct key_def *key_def)
 	assert(key_def->is_unique);
 	check_key_parts(key_def, part_count, false);
 
-	(void) part_count;
+	node_foldkey(&fmtdef, &tmp_node, &tmp_node_size, key, part_count);
 
-	struct tuple *ret = NULL;
-	struct mh_i32ptr_node_t node = int32_key_to_node(key);
-	mh_int_t k = mh_i32ptr_get(int_hash, &node, NULL, NULL);
-	if (k != mh_end(int_hash))
-		ret = mh_i32ptr_node(int_hash, k)->val;
-#ifdef DEBUG
-	say_debug("Hash32Index find(self:%p, key:%i) = %p", self, node.key, ret);
-#endif
-	return ret;
+	mh_int_t k = mh_index_get(hash, (const void **) &tmp_node, self, self);
+	if (k == mh_end(hash))
+		return NULL;
+
+	return node_unfold(&fmtdef, *mh_index_node(hash, k));
 }
 
 - (struct tuple *) replace: (struct tuple *) old_tuple
 			  :(struct tuple *) new_tuple
 			  :(enum dup_replace_mode) mode
 {
-	struct mh_i32ptr_node_t new_node, old_node;
+	say_warn("replace: %p %p", old_tuple, new_tuple);
+
 	uint32_t errcode;
-
 	if (new_tuple) {
-		struct mh_i32ptr_node_t *dup_node = &old_node;
-		new_node = int32_tuple_to_node(new_tuple, key_def);
-		mh_int_t pos = mh_i32ptr_replace(int_hash, &new_node,
-						 &dup_node, NULL, NULL);
+		void *dup_node = NULL;
+		void **p_dup_node = &dup_node;
 
+		void *new_node = NULL;
+		size_t new_node_size = node_size(&fmtdef);
+		new_node = index_realloc(NULL, new_node_size, "node new");
+
+		node_fold(&fmtdef, new_node, new_tuple);
+
+		mh_int_t pos = mh_index_replace(hash,
+						(const void **) &new_node,
+						&p_dup_node,
+						self, self);
 		ERROR_INJECT(ERRINJ_INDEX_ALLOC,
 		{
-			mh_i32ptr_del(int_hash, pos, NULL, NULL);
-			pos = mh_end(int_hash);
+			mh_index_remove(hash, (const void **) &new_node, NULL,
+					self, self);
+			pos = mh_end(hash);
 		});
 
-		if (pos == mh_end(int_hash)) {
+		if (pos == mh_end(hash)) {
+			index_realloc(new_node, 0, "node new");
+
 			tnt_raise(LoggedError, :ER_MEMORY_ISSUE, (ssize_t) pos,
 				  "int hash", "key");
 		}
-		struct tuple *dup_tuple = dup_node ? dup_node->val : NULL;
+
+		struct tuple *dup_tuple = node_unfold(&fmtdef, dup_node);
 		errcode = replace_check_dup(old_tuple, dup_tuple, mode);
 
 		if (errcode) {
-			mh_i32ptr_remove(int_hash, &new_node, NULL, NULL);
+			mh_index_remove(hash, (const void **) &new_node, NULL,
+					self, self);
+			index_realloc(new_node, 0, "node new");
+
 			if (dup_node) {
-				pos = mh_i32ptr_replace(int_hash, dup_node,
-							NULL, NULL, NULL);
-				if (pos == mh_end(int_hash)) {
+				pos = mh_index_replace(hash, (const void **) &dup_node,
+							NULL, self, self);
+				if (pos == mh_end(hash)) {
 					panic("Failed to allocate memory in "
 					      "recover of int hash");
 				}
 			}
 			tnt_raise(ClientError, :errcode, index_n(self));
 		}
-		if (dup_tuple)
+
+		if (dup_tuple) {
+			index_realloc(dup_node, 0, "node dup");
+
 			return dup_tuple;
+		}
 	}
+
 	if (old_tuple) {
-		old_node = int32_tuple_to_node(old_tuple, key_def);
-		mh_i32ptr_remove(int_hash, &old_node, NULL, NULL);
+		void *old_node = NULL;
+		size_t old_node_size = node_size(&fmtdef);
+		old_node = alloca(old_node_size);
+
+		node_fold(&fmtdef, old_node, old_tuple);
+
+		void *dup_node = NULL;
+		void **p_dup_node = &dup_node;
+
+		mh_index_remove(hash, (const void **) &old_node, &p_dup_node,
+				self, self);
+
+		if (dup_node != NULL) {
+			index_realloc(dup_node, 0, "index remove");
+		}
 	}
+
 	return old_tuple;
 }
 
 
 - (struct iterator *) allocIterator
 {
-	struct hash_i32_iterator *it = malloc(sizeof(struct hash_i32_iterator));
-	if (it) {
-		memset(it, 0, sizeof(*it));
-		it->base.next = hash_iterator_i32_ge;
-		it->base.free = hash_iterator_free;
+	struct hash_iterator *it = malloc(sizeof(*it));
+	if (it == NULL) {
+		tnt_raise(LoggedError, :ER_MEMORY_ISSUE, sizeof(*it),
+			  "hash_index", "iterator");
 	}
+
+	memset(it, 0, sizeof(*it));
+	it->base.next = hash_iterator_next;
+	it->base.free = hash_iterator_free;
+
 	return (struct iterator *) it;
 }
 
-- (void) initIterator: (struct iterator *) ptr: (enum iterator_type) type
+- (void) initIterator: (struct iterator *) ptr :(enum iterator_type) type
                         :(void *) key :(int) part_count
 {
+	say_warn("initIterator format=%d part_count=%d",
+		 fmtdef.format, part_count);
+
 	assert(ptr->free == hash_iterator_free);
-	struct hash_i32_iterator *it = (struct hash_i32_iterator *) ptr;
-	struct mh_i32ptr_node_t node;
+	struct hash_iterator *it = (struct hash_iterator *) ptr;
+
+	if (part_count != 0) {
+		check_key_parts(key_def, part_count,
+				traits->allows_partial_key);
+
+		node_foldkey(&fmtdef, &it->key_node, &it->key_node_size,
+			      key, part_count);
+	} else {
+		key = NULL;
+	}
 
 	switch (type) {
 	case ITER_GE:
 		if (key != NULL) {
-			check_key_parts(key_def, part_count,
-					traits->allows_partial_key);
-			node = int32_key_to_node(key);
-			it->h_pos = mh_i32ptr_get(int_hash, &node, NULL, NULL);
-			it->base.next = hash_iterator_i32_ge;
+			mh_index_iterator_init_ge(hash, &it->it,
+				(const void **) &it->key_node, self, self);
 			break;
 		}
 		/* Fall through. */
 	case ITER_ALL:
-		it->h_pos = mh_begin(int_hash);
-		it->base.next = hash_iterator_i32_ge;
+		mh_index_iterator_init_ge(hash, &it->it, NULL, self, self);
 		break;
 	case ITER_EQ:
 		check_key_parts(key_def, part_count,
 				traits->allows_partial_key);
-		node = int32_key_to_node(key);
-		it->h_pos = mh_i32ptr_get(int_hash, &node, NULL, NULL);
-		it->base.next = hash_iterator_i32_eq;
-		break;
-	default:
-		tnt_raise(ClientError, :ER_UNSUPPORTED,
-			  "Hash index", "requested iterator type");
-	}
-	it->hash = int_hash;
-}
-@end
-
-/* }}} */
-
-/* {{{ Hash64Index ************************************************/
-
-static inline struct mh_i64ptr_node_t
-int64_key_to_node(void *key)
-{
-	u32 key_size = load_varint32(&key);
-	if (key_size != 8)
-		tnt_raise(ClientError, :ER_KEY_FIELD_TYPE, "u64");
-	struct mh_i64ptr_node_t node = { .key = *(u64 *) key };
-	return node;
-}
-
-static inline struct mh_i64ptr_node_t
-int64_tuple_to_node(struct tuple *tuple, struct key_def *key_def)
-{
-	void *field = tuple_field(tuple, key_def->parts[0].fieldno);
-	struct mh_i64ptr_node_t node = int64_key_to_node(field);
-	node.val = tuple;
-	return node;
-}
-
-@implementation Hash64Index
-- (void) reserve: (u32) n_tuples
-{
-	mh_i64ptr_reserve(int64_hash, n_tuples, NULL, NULL);
-}
-
-- (void) free
-{
-	mh_i64ptr_destroy(int64_hash);
-	[super free];
-}
-
-- (id) init: (struct key_def *) key_def_arg :(struct space *) space_arg
-{
-	self = [super init: key_def_arg :space_arg];
-	if (self == NULL)
-		return NULL;
-
-	int64_hash = mh_i64ptr_init();
-	return self;
-}
-
-- (size_t) size
-{
-	return mh_size(int64_hash);
-}
-
-- (struct tuple *) findByKey: (void *) key :(int) part_count
-{
-	assert(key_def->is_unique);
-	check_key_parts(key_def, part_count, false);
-
-	struct tuple *ret = NULL;
-	struct mh_i64ptr_node_t node = int64_key_to_node(key);
-	mh_int_t k = mh_i64ptr_get(int64_hash, &node, NULL, NULL);
-	if (k != mh_end(int64_hash))
-		ret = mh_i64ptr_node(int64_hash, k)->val;
-#ifdef DEBUG
-	say_debug("Hash64Index find(self:%p, key:%"PRIu64") = %p", self, node.key, ret);
+#if defined(NEN_CODE)
+		mh_index_iterator_init_eq(hash, &it->it,
+			(const void **) &it->key_node, self, self);
+#else
+		it->h_pos = mh_index_get(hash, (const void **) &it->key_node, self, self);
+		it->it.h = hash;
+		it->base.next = hash_iterator_test_eq;
 #endif
-	return ret;
-}
-
-- (struct tuple *) replace: (struct tuple *) old_tuple
-			  :(struct tuple *) new_tuple
-			  :(enum dup_replace_mode) mode
-{
-	struct mh_i64ptr_node_t new_node, old_node;
-	uint32_t errcode;
-
-	if (new_tuple) {
-		struct mh_i64ptr_node_t *dup_node = &old_node;
-		new_node = int64_tuple_to_node(new_tuple, key_def);
-		mh_int_t pos = mh_i64ptr_replace(int64_hash, &new_node,
-						 &dup_node, NULL, NULL);
-
-		ERROR_INJECT(ERRINJ_INDEX_ALLOC,
-		{
-			mh_i64ptr_del(int64_hash, pos, NULL, NULL);
-			pos = mh_end(int64_hash);
-		});
-		if (pos == mh_end(int64_hash)) {
-			tnt_raise(LoggedError, :ER_MEMORY_ISSUE, (ssize_t) pos,
-				  "int64 hash", "key");
-		}
-		struct tuple *dup_tuple = dup_node ? dup_node->val : NULL;
-		errcode = replace_check_dup(old_tuple, dup_tuple, mode);
-
-		if (errcode) {
-			mh_i64ptr_remove(int64_hash, &new_node, NULL, NULL);
-			if (dup_node) {
-				pos = mh_i64ptr_replace(int64_hash, dup_node,
-							NULL, NULL, NULL);
-				if (pos == mh_end(int64_hash)) {
-					panic("Failed to allocate memory in "
-					      "recover of int64 hash");
-				}
-			}
-			tnt_raise(ClientError, :errcode, index_n(self));
-		}
-		if (dup_tuple)
-			return dup_tuple;
-	}
-	if (old_tuple) {
-		old_node = int64_tuple_to_node(old_tuple, key_def);
-		mh_i64ptr_remove(int64_hash, &old_node, NULL, NULL);
-	}
-	return old_tuple;
-}
-
-
-- (struct iterator *) allocIterator
-{
-	struct hash_i64_iterator *it = malloc(sizeof(struct hash_i64_iterator));
-	if (it) {
-		memset(it, 0, sizeof(*it));
-		it->base.next = hash_iterator_i64_ge;
-		it->base.free = hash_iterator_free;
-	}
-	return (struct iterator *) it;
-}
-
-
-- (void) initIterator: (struct iterator *) ptr: (enum iterator_type) type
-                        :(void *) key :(int) part_count
-{
-	(void) part_count;
-	assert(ptr->free == hash_iterator_free);
-	struct hash_i64_iterator *it = (struct hash_i64_iterator *) ptr;
-	struct mh_i64ptr_node_t node;
-
-	switch (type) {
-	case ITER_GE:
-		if (key != NULL) {
-			check_key_parts(key_def, part_count,
-					traits->allows_partial_key);
-			node = int64_key_to_node(key);
-			it->h_pos = mh_i64ptr_get(int64_hash, &node, NULL, NULL);
-			it->base.next = hash_iterator_i64_ge;
-			break;
-		}
-		/* Fallthrough. */
-	case ITER_ALL:
-		it->base.next = hash_iterator_i64_ge;
-		it->h_pos = mh_begin(int64_hash);
-		break;
-	case ITER_EQ:
-		check_key_parts(key_def, part_count,
-				traits->allows_partial_key);
-		node = int64_key_to_node(key);
-		it->h_pos = mh_i64ptr_get(int64_hash, &node, NULL, NULL);
-		it->base.next = hash_iterator_i64_eq;
 		break;
 	default:
 		tnt_raise(ClientError, :ER_UNSUPPORTED,
 			  "Hash index", "requested iterator type");
 	}
-	it->hash = int64_hash;
+
+	it->index = self;
 }
+
+
 @end
-
-/* }}} */
-
-/* {{{ HashStrIndex ***********************************************/
-
-static inline struct mh_lstrptr_node_t
-lstrptr_tuple_to_node(struct tuple *tuple, struct key_def *key_def)
-{
-	void *field = tuple_field(tuple, key_def->parts[0].fieldno);
-	if (field == NULL)
-		tnt_raise(ClientError, :ER_NO_SUCH_FIELD,
-			  key_def->parts[0].fieldno);
-
-	struct mh_lstrptr_node_t node = { .key = field, .val = tuple };
-	return node;
-}
-
-
-@implementation HashStrIndex
-- (void) reserve: (u32) n_tuples
-{
-	mh_lstrptr_reserve(str_hash, n_tuples, NULL, NULL);
-}
-
-- (void) free
-{
-	mh_lstrptr_destroy(str_hash);
-	[super free];
-}
-
-- (id) init: (struct key_def *) key_def_arg :(struct space *) space_arg
-{
-	self = [super init: key_def_arg :space_arg];
-	if (self == NULL)
-		return NULL;
-
-	str_hash = mh_lstrptr_init();
-	return self;
-}
-
-- (size_t) size
-{
-	return mh_size(str_hash);
-}
-
-- (struct tuple *) findByKey: (void *) key :(int) part_count
-{
-	assert(key_def->is_unique);
-	check_key_parts(key_def, part_count, false);
-
-	struct tuple *ret = NULL;
-	const struct mh_lstrptr_node_t node = { .key = key };
-	mh_int_t k = mh_lstrptr_get(str_hash, &node, NULL, NULL);
-	if (k != mh_end(str_hash))
-		ret = mh_lstrptr_node(str_hash, k)->val;
-#ifdef DEBUG
-	u32 key_size = load_varint32(&key);
-	say_debug("HashStrIndex find(self:%p, key:(%i)'%.*s') = %p",
-		  self, key_size, key_size, (u8 *)key, ret);
-#endif
-	return ret;
-}
-
-- (struct tuple *) replace: (struct tuple *) old_tuple
-			  :(struct tuple *) new_tuple
-			  :(enum dup_replace_mode) mode
-{
-	struct mh_lstrptr_node_t new_node, old_node;
-	uint32_t errcode;
-
-	if (new_tuple) {
-		struct mh_lstrptr_node_t *dup_node = &old_node;
-		new_node = lstrptr_tuple_to_node(new_tuple, key_def);
-		mh_int_t pos = mh_lstrptr_replace(str_hash, &new_node,
-						  &dup_node, NULL, NULL);
-
-		ERROR_INJECT(ERRINJ_INDEX_ALLOC,
-		{
-			mh_lstrptr_del(str_hash, pos, NULL, NULL);
-			pos = mh_end(str_hash);
-		});
-
-		if (pos == mh_end(str_hash)) {
-			tnt_raise(LoggedError, :ER_MEMORY_ISSUE, (ssize_t) pos,
-				  "str hash", "key");
-		}
-		struct tuple *dup_tuple = dup_node ? dup_node->val : NULL;
-		errcode = replace_check_dup(old_tuple, dup_tuple, mode);
-
-		if (errcode) {
-			mh_lstrptr_remove(str_hash, &new_node, NULL, NULL);
-			if (dup_node) {
-				pos = mh_lstrptr_replace(str_hash, dup_node,
-							 NULL, NULL, NULL);
-				if (pos == mh_end(str_hash)) {
-					panic("Failed to allocate memory in "
-					      "recover of str hash");
-				}
-			}
-			tnt_raise(ClientError, :errcode, index_n(self));
-		}
-		if (dup_tuple)
-			return dup_tuple;
-	}
-	if (old_tuple) {
-		old_node = lstrptr_tuple_to_node(old_tuple, key_def);
-		mh_lstrptr_remove(str_hash, &old_node, NULL, NULL);
-	}
-	return old_tuple;
-}
-
-- (struct iterator *) allocIterator
-{
-	struct hash_lstr_iterator *it = malloc(sizeof(struct hash_lstr_iterator));
-	if (it) {
-		memset(it, 0, sizeof(*it));
-		it->base.next = hash_iterator_lstr_ge;
-		it->base.free = hash_iterator_free;
-	}
-	return (struct iterator *) it;
-}
-
-
-- (void) initIterator: (struct iterator *) ptr
-			:(enum iterator_type) type
-                        :(void *) key :(int) part_count
-{
-	(void) part_count;
-
-	assert(ptr->free == hash_iterator_free);
-	struct hash_lstr_iterator *it = (struct hash_lstr_iterator *) ptr;
-	struct mh_lstrptr_node_t node;
-
-	switch (type) {
-	case ITER_GE:
-		if (key != NULL) {
-			check_key_parts(key_def, part_count,
-					traits->allows_partial_key);
-			node.key = key;
-			it->h_pos = mh_lstrptr_get(str_hash, &node, NULL, NULL);
-			it->base.next = hash_iterator_lstr_ge;
-			break;
-		}
-		/* Fall through. */
-	case ITER_ALL:
-		it->base.next = hash_iterator_lstr_ge;
-		it->h_pos = mh_begin(str_hash);
-		break;
-	case ITER_EQ:
-		check_key_parts(key_def, part_count,
-				traits->allows_partial_key);
-		node.key = key;
-		it->h_pos = mh_lstrptr_get(str_hash, &node, NULL, NULL);
-		it->base.next = hash_iterator_lstr_eq;
-		break;
-	default:
-		tnt_raise(ClientError, :ER_UNSUPPORTED,
-			  "Hash index", "requested iterator type");
-	}
-	it->hash = str_hash;
-}
-@end
-
-/* }}} */
 

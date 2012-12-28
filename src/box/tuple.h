@@ -93,5 +93,9 @@ static inline size_t tuple_len(struct tuple *tuple)
 }
 
 void tuple_free(struct tuple *tuple);
+
+struct key_def;
+
+
 #endif /* TARANTOOL_BOX_TUPLE_H_INCLUDED */
 

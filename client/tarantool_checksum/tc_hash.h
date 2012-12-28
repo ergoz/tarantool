@@ -6,6 +6,7 @@
 #endif
 
 #include <stdint.h>
+#include <assert.h>
 
 #define mh_name _u32ptr
 struct mh_u32ptr_node_t {

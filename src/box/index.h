@@ -226,4 +226,7 @@ replace_check_dup(struct tuple *old_tuple,
 		  struct tuple *dup_tuple,
 		  enum dup_replace_mode mode);
 
+void *
+index_realloc(void *ptr, size_t size, const char *what);
+
 #endif /* TARANTOOL_BOX_INDEX_H_INCLUDED */

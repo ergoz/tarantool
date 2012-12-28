@@ -31,7 +31,7 @@
 #include <pickle.h>
 #include <salloc.h>
 #include "tbuf.h"
-
+#include "index.h"
 #include "exception.h"
 
 /** Allocate a tuple */
@@ -154,3 +154,4 @@ tuple_print(struct tbuf *buf, uint8_t field_count, void *f)
 	}
 	tbuf_printf(buf, "}");
 }
+

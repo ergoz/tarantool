@@ -323,8 +323,7 @@ static void
 unregister_fid(struct fiber *fiber)
 {
 	struct mh_i32ptr_node_t node = { .key = fiber->fid };
-	mh_int_t k = mh_i32ptr_get(fibers_registry, &node, NULL, NULL);
-	mh_i32ptr_del(fibers_registry, k, NULL, NULL);
+	mh_i32ptr_remove(fibers_registry, &node, NULL, NULL, NULL);
 }
 
 void

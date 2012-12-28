@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <assert.h>
 #include "unit.h"
 
 #define MH_SOURCE 1

@@ -103,6 +103,10 @@ struct _mh(t) {
 	struct _mh(t) *shadow;
 };
 
+#ifndef mh_eq_exact
+#define mh_eq_exact(a, b, eq_arg) 1
+#endif
+
 #define mh_exist(h, i)		({ h->b[i >> 4] & (1 << (i % 16)); })
 #define mh_dirty(h, i)		({ h->b[i >> 4] & (1 << (i % 16 + 16)); })
 
@@ -149,8 +153,11 @@ int _mh(start_resize)(struct _mh(t) *h, mh_int_t buckets, mh_int_t batch,
 		      mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg);
 void _mh(reserve)(struct _mh(t) *h, mh_int_t size,
 		  mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg);
-void __attribute__((noinline)) _mh(del_resize)(struct _mh(t) *h, mh_int_t x,
-					       mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg);
+
+void __attribute__((noinline))
+_mh(remove_resize)(struct _mh(t) *h, const mh_node_t *node,
+		   mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg);
+
 void _mh(dump)(struct _mh(t) *h);
 
 #define put_slot(h, node, hash_arg, eq_arg) \
@@ -170,8 +177,92 @@ _mh(next_slot)(mh_int_t slot, mh_int_t inc, mh_int_t size)
 	return slot >= size ? slot - size : slot;
 }
 
+struct _mh(iterator) {
+	struct _mh(t) *h;
+	int is_ge;
+	mh_hash_arg_t hash_arg;
+	mh_eq_arg_t eq_arg;
+	mh_int_t k;
+	mh_int_t i;
+	mh_int_t inc;
+	mh_node_t node;
+};
+
+static inline void
+_mh(iterator_init_eq)(struct _mh(t) *h, struct _mh(iterator) *it, const mh_node_t *node,
+		   mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg)
+{
+	it->is_ge = 0;
+	it->h = h;
+	it->hash_arg = hash_arg;
+	it->eq_arg = eq_arg;
+	it->k = mh_hash(node, hash_arg);
+	it->i = it->k % h->n_buckets;
+	it->inc = 1 + it->k % (h->n_buckets - 1);
+	memcpy(&it->node, node, sizeof(mh_node_t));
+}
+
+static inline void
+_mh(iterator_init_ge)(struct _mh(t) *h, struct _mh(iterator) *it, const mh_node_t *node,
+		      mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg)
+{
+	(void) hash_arg;
+	(void) eq_arg;
+
+	it->is_ge = 1;
+	it->h = h;
+	if (node != NULL) {
+		it->i = mh_hash(node, hash_arg) % h->n_buckets;
+	} else {
+		it->i = mh_begin(h);
+	}
+
+	it->inc = 0;
+	it->k = 0;
+}
+
 static inline mh_int_t
-_mh(get)(struct _mh(t) *h, const mh_node_t *node,
+_mh(iterator_next_eq)(struct _mh(iterator) *it)
+{
+	for (;;) {
+		mh_node_t *node = &it->node;
+
+		if ((mh_exist(it->h, it->i) && mh_eq(node, mh_node(it->h, it->i), it->eq_arg))) {
+			mh_int_t found = it->i;
+			it->i = _mh(next_slot)(it->i, it->inc, it->h->n_buckets);
+			return found;
+		}
+
+		if (!mh_dirty(it->h, it->i))
+			return it->h->n_buckets;
+
+		it->i = _mh(next_slot)(it->i, it->inc, it->h->n_buckets);
+	}
+}
+
+static inline mh_int_t
+_mh(iterator_next_ge)(struct _mh(iterator) *it)
+{
+	while (it->i < mh_end(it->h)) {
+		if (mh_exist(it->h, it->i))
+			return it->i++;
+		it->i++;
+	}
+
+	return mh_end(it->h);
+}
+
+static inline mh_int_t
+_mh(iterator_next)(struct _mh(iterator) *it) {
+	if (it->is_ge == 0) {
+		return _mh(iterator_next_eq)(it);
+	} else {
+		return _mh(iterator_next_ge)(it);
+	}
+}
+
+static inline mh_int_t
+_mh(get2)(struct _mh(t) *h, const mh_node_t *node, int exact,
 	 mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg)
 {
 	(void) hash_arg;
@@ -181,14 +272,33 @@ _mh(get)(struct _mh(t) *h, const mh_node_t *node,
 	mh_int_t i = k % h->n_buckets;
 	mh_int_t inc = 1 + k % (h->n_buckets - 1);
 	for (;;) {
-		if ((mh_exist(h, i) && mh_eq(node, mh_node(h, i), eq_arg)))
-			return i;
+		if (mh_exist(h, i) && mh_eq(node, mh_node(h, i), eq_arg)) {
+			if (!exact || mh_eq_exact(node, mh_node(h, i), eq_arg))
+				return i;
+
+			i = _mh(next_slot)(i, inc, h->n_buckets);
+			continue;
+		}
 
 		if (!mh_dirty(h, i))
 			return h->n_buckets;
 
 		i = _mh(next_slot)(i, inc, h->n_buckets);
 	}
+}
+
+static inline mh_int_t
+_mh(get)(struct _mh(t) *h, const mh_node_t *node,
+	 mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg)
+{
+	return _mh(get2)(h, node, 0, hash_arg, eq_arg);
+}
+
+static inline mh_int_t
+_mh(get_exact)(struct _mh(t) *h, const mh_node_t *node,
+	 mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg)
+{
+	return _mh(get2)(h, node, 1, hash_arg, eq_arg);
 }
 
 static inline mh_int_t
@@ -204,8 +314,14 @@ _mh(put_slot)(struct _mh(t) *h, const mh_node_t *node,
 
 	/* Skip through all collisions. */
 	while (mh_exist(h, i)) {
-		if (mh_eq(node, mh_node(h, i), eq_arg))
-			return i;               /* Found a duplicate. */
+		if (mh_eq(node, mh_node(h, i), eq_arg)) {
+			if (mh_eq_exact(node, mh_node(h, i), eq_arg))
+				return i; /* Found a duplicate. */
+
+			i = _mh(next_slot)(i, inc, h->n_buckets);
+			continue;
+		}
+
 		/*
 		 * Mark this link as part of a collision chain. The
 		 * chain always ends with a non-marked link.
@@ -227,8 +343,15 @@ _mh(put_slot)(struct _mh(t) *h, const mh_node_t *node,
 	while (mh_dirty(h, i)) {
 		i = _mh(next_slot)(i, inc, h->n_buckets);
 
-		if (mh_exist(h, i) && mh_eq(mh_node(h, i), node, eq_arg))
-			return i;               /* Found a duplicate. */
+		if (mh_exist(h, i)) {
+			if (mh_eq(node, mh_node(h, i), eq_arg)) {
+				if (mh_eq_exact(node, mh_node(h, i), eq_arg))
+					return i; /* Found a duplicate. */
+
+				continue;
+			}
+		}
+
 	}
 	/* Reached the end of the collision chain: no duplicates. */
 	return save_i;
@@ -292,7 +415,7 @@ static inline mh_int_t
 _mh(replace)(struct _mh(t) *h, const mh_node_t *node, mh_node_t **p_old,
 	 mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg)
 {
-	mh_int_t k = _mh(get)(h, node, hash_arg, eq_arg);
+	mh_int_t k = _mh(get_exact)(h, node, hash_arg, eq_arg);
 	if (k == mh_end(h)) {
 		/* No such node yet: insert a new one. */
 		if (p_old) {
@@ -314,34 +437,78 @@ _mh(replace)(struct _mh(t) *h, const mh_node_t *node, mh_node_t **p_old,
 }
 
 static inline void
+_mh(remove)(struct _mh(t) *h, const mh_node_t *node, mh_node_t **p_old,
+	    mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg)
+{
+	struct _mh(iterator) it;
+
+	_mh(iterator_init_eq)(h, &it, node, hash_arg, eq_arg);
+
+	/* Try to find a first node that exact equals to @a node */
+	mh_int_t r = mh_end(h);
+	while ((r = _mh(iterator_next_eq)(&it)) != mh_end(h)) {
+		if (mh_eq_exact(node, mh_node(h, r), eq_arg))
+			break;
+	}
+
+	if (r == mh_end(h)) {
+		/* no such node, return NULL */
+		if (p_old) {
+			*p_old = NULL;
+		}
+
+		return;
+	}
+
+	/* node to remove is found */
+	if (p_old) {
+		/* save the old value. */
+		memcpy(*p_old, mh_node(h, r), sizeof(mh_node_t));
+	}
+
+	mh_int_t next = _mh(iterator_next_eq)(&it);
+	if (next == mh_end(h)) {
+		mh_setfree(h, r);
+		h->size--;
+		if (!mh_dirty(h, r))
+			h->n_dirty--;
+	} else {
+		/* hash next node with same key */
+		mh_setfree(h, r);
+		mh_setdirty(h, r);
+	}
+
+#if MH_INCREMENTAL_RESIZE
+	if (mh_unlikely(h->resize_position)) {
+		_mh(remove_resize)(h, node, hash_arg, eq_arg);
+	}
+#endif
+}
+
+static inline void
 _mh(del)(struct _mh(t) *h, mh_int_t x,
 	 mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg)
 {
-	if (x != h->n_buckets && mh_exist(h, x)) {
-		mh_setfree(h, x);
-		h->size--;
-		if (!mh_dirty(h, x))
-			h->n_dirty--;
-#if MH_INCREMENTAL_RESIZE
-		if (mh_unlikely(h->resize_position))
-			_mh(del_resize)(h, x, hash_arg, eq_arg);
-#endif
-	}
+	if (x == h->n_buckets || !mh_exist(h, x))
+		return;
+
+	/* get a node by position and invoke _mh(remove) */
+	const mh_node_t *key_node = mh_node(h, x);
+	_mh(remove)(h, key_node, NULL, hash_arg, eq_arg);
 }
 #endif
-
-static inline void
-_mh(remove)(struct _mh(t) *h, const mh_node_t *node,
-	 mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg)
-{
-	mh_int_t k = _mh(get)(h, node, hash_arg, eq_arg);
-	if (k != mh_end(h))
-		_mh(del)(h, k, hash_arg, eq_arg);
-}
-
 
 #ifdef MH_SOURCE
+void __attribute__((noinline))
+_mh(remove_resize)(struct _mh(t) *h, const mh_node_t *node,
+	    mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg)
+{
+	struct _mh(t) *s = h->shadow;
+	_mh(remove)(s, node, NULL, hash_arg, eq_arg);
+	_mh(resize)(h, hash_arg, eq_arg);
+}
 
+#if UNSAFE_CODE
 void __attribute__((noinline))
 _mh(del_resize)(struct _mh(t) *h, mh_int_t x,
 		mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg)
@@ -352,6 +519,7 @@ _mh(del_resize)(struct _mh(t) *h, mh_int_t x,
 	_mh(del)(s, y, hash_arg, eq_arg);
 	_mh(resize)(h, hash_arg, eq_arg);
 }
+#endif /* UNSAFE_CODE */
 
 struct _mh(t) *
 _mh(init)()
@@ -518,6 +686,7 @@ _mh(dump)(struct _mh(t) *h)
 #undef mh_name
 #undef mh_hash
 #undef mh_eq
+#undef mh_eq_exact
 #undef mh_node
 #undef mh_dirty
 #undef mh_place

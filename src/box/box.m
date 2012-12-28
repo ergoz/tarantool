@@ -512,8 +512,10 @@ snapshot_space(struct space *sp, void *udata)
 	struct iterator *it = pk->position;
 	[pk initIterator: it :ITER_ALL :NULL :0];
 
-	while ((tuple = it->next(it)))
+	while ((tuple = it->next(it))) {
+		say_warn("Snapshot write: %p", tuple);
 		snapshot_write_tuple(ud->l, ud->batch, space_n(sp), tuple);
+	}
 }
 
 void

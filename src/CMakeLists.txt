@@ -133,6 +133,7 @@ set (common_sources
      crc32.c
      rope.c
      ipc.m
+     hash.c
      lua/info.m
      lua/stat.m
      lua/slab.m

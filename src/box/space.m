@@ -198,6 +198,16 @@ space_free(void)
 		mh_i32ptr_del(spaces, i, NULL, NULL);
 
 		int j;
+#if 0
+		Index *pk = space->index[0];
+		struct iterator *it = pk->position;
+		struct tuple *tuple;
+		[pk initIterator: it :ITER_ALL :NULL :0];
+		while ((tuple = it->next(it))) {
+			tuple->refs = 0;
+			tuple_free(tuple);
+		}
+#endif
 		for (j = 0 ; j < space->key_count; j++) {
 			Index *index = space->index[j];
 			[index free];
@@ -363,6 +373,7 @@ space_config()
 		}
 		space_init_field_types(space);
 
+		/* fill space indexes */
 		/* fill space indexes */
 		for (int j = 0; cfg_space->index[j] != NULL; ++j) {
 			typeof(cfg_space->index[j]) cfg_index = cfg_space->index[j];
@@ -553,15 +564,9 @@ check_spaces(struct tarantool_cfg *conf)
 				return -1;
 			}
 
+#if 0
 			switch (index_type) {
 			case HASH:
-				/* check hash index */
-				/* hash index must has single-field key */
-				if (key_part_count != 1) {
-					out_warning(0, "(space = %zu index = %zu) "
-					            "hash index must has a single-field key", i, j);
-					return -1;
-				}
 				/* hash index must be unique */
 				if (!index->unique) {
 					out_warning(0, "(space = %zu index = %zu) "
@@ -575,6 +580,7 @@ check_spaces(struct tarantool_cfg *conf)
 			default:
 				assert(false);
 			}
+#endif
 		}
 
 		/* Check for index field type conflicts */

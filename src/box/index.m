@@ -88,6 +88,20 @@ replace_check_dup(struct tuple *old_tuple,
 	return 0;
 }
 
+void *
+index_realloc(void *ptr, size_t size, const char *what)
+{
+	void *result = realloc(ptr, size);
+#ifndef NDEBUG
+	say_debug("index_realloc(%p, %zu) => %p /* %s */",
+		ptr, size, result, what);
+#endif /* NDEBUG */
+	if (result == NULL && size != 0)
+		tnt_raise(LoggedError, :ER_MEMORY_ISSUE, size, "index", what);
+
+	return result;
+}
+
 /* }}} */
 
 /* {{{ Index -- base class for all indexes. ********************/
@@ -103,14 +117,19 @@ replace_check_dup(struct tuple *old_tuple,
 	 :(struct key_def *) key_def
 	 :(struct space *) space
 {
+	(void) key_def;
+	(void) space;
+
 	switch (type) {
 	case HASH:
-		return [HashIndex alloc: key_def :space];
+		return [HashIndex alloc];
 	case TREE:
-		return [TreeIndex alloc: key_def :space];
+		return [TreeIndex alloc];
 	default:
 		assert(false);
 	}
+
+	return NULL;
 }
 
 - (id) init: (struct key_def *) key_def_arg :(struct space *) space_arg;

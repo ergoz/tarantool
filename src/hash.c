@@ -1,5 +1,3 @@
-#ifndef TARANTOOL_BOX_TREE_INDEX_H_INCLUDED
-#define TARANTOOL_BOX_TREE_INDEX_H_INCLUDED
 /*
  * Redistribution and use in source and binary forms, with or
  * without modification, are permitted provided that the following
@@ -29,21 +27,5 @@
  * SUCH DAMAGE.
  */
 
-#include "index.h"
-#include "index_node.h"
+#include "hash.h"
 
-struct sptree_index;
-
-@interface TreeIndex: Index {
-@public
-	struct node_format_def fmtdef;
-	struct sptree_index *tree;
-
-	void *tmp_node;
-	size_t tmp_node_size;
-};
-
-+ (struct index_traits *) traits;
-@end
-
-#endif /* TARANTOOL_BOX_TREE_INDEX_H_INCLUDED */

@@ -30,14 +30,22 @@
  */
 
 #include "index.h"
+#include "index_node.h"
 
 @class Index;
 
-@interface HashIndex: Index
+struct mh_index_t;
+
+@interface HashIndex: Index {
+@public
+	struct node_format_def fmtdef;
+	struct mh_index_t *hash;
+
+	void *tmp_node;
+	size_t tmp_node_size;
+}
 
 + (struct index_traits *) traits;
-+ (HashIndex *) alloc: (struct key_def *) key_def :(struct space *) space;
-
 - (void) reserve: (u32) n_tuples;
 @end
 
