@@ -30,6 +30,10 @@
  */
 #include <stdbool.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 struct fiber;
 
 /*
@@ -68,5 +72,8 @@ int tnt_latch_trylock(struct tnt_latch *latch);
  */
 void tnt_latch_unlock(struct tnt_latch *latch);
 
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_LATCH_H_INCLUDED */

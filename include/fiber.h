@@ -42,6 +42,10 @@
 #include "palloc.h"
 #include <rlist.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 #define FIBER_NAME_MAXLEN 32
 
 #define FIBER_READING_INBOX (1 << 0)
@@ -147,5 +151,9 @@ fiber_set_sid(struct fiber *f, uint32_t sid)
 {
 	f->sid = sid;
 }
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_FIBER_H_INCLUDED */

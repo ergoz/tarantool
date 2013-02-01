@@ -33,6 +33,10 @@
 #include <util.h>
 #include "exception.h"
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 struct tbuf;
 
 u8 *save_varint32(u8 *target, u32 value);
@@ -126,5 +130,9 @@ tuple_range_size(const void **begin, const void *end, size_t count)
 	}
 	return *begin - start;
 }
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_PICKLE_H_INCLUDED */

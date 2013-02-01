@@ -35,6 +35,11 @@
 #include <stdbool.h>
 #include "tarantool_ev.h"
 #include "sio.h"
+
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 /**
  * Exception-aware way to add a listening socket to the event
  * loop. Callbacks are invoked on bind and accept events.
@@ -126,5 +131,8 @@ evio_is_connected(struct ev_io *ev)
 	return ev->fd >= 0;
 }
 
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_EVIO_H_INCLUDED */

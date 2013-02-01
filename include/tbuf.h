@@ -34,6 +34,10 @@
 
 #include <util.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 struct tbuf {
 	/* Used space in the buffer. */
 	u32 size;
@@ -94,4 +98,9 @@ void tbuf_printf(struct tbuf *b, const char *format, ...)
 	__attribute__ ((format(FORMAT_PRINTF, 2, 3)));
 
 char *tbuf_to_hex(const struct tbuf *x);
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
+
 #endif /* TARANTOOL_TBUF_H_INCLUDED */

@@ -31,6 +31,10 @@
 #include <tarantool.h>
 #include <util.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 /**
  * Check replication configuration.
  *
@@ -56,6 +60,10 @@ replication_prefork();
  */
 void
 replication_init();
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif // TARANTOOL_REPLICATION_H_INCLUDED
 

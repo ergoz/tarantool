@@ -31,6 +31,10 @@
 #include <stdbool.h>
 #include <tarantool_ev.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 /**
  * @brief CHANNELS
  */
@@ -176,5 +180,9 @@ bool
 ipc_channel_has_writers(struct ipc_channel *ch);
 
 extern const ev_tstamp IPC_TIMEOUT_INFINITY;
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_IPC_H_INCLUDED */

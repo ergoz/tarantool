@@ -31,10 +31,19 @@
 #include <objc/Object.h>
 #include <objc/runtime.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 @interface tnt_Object: Object
 + (id) alloc;
 - (id) init;
 - (void) free;
 - (void) subclassResponsibility: (SEL) cmd;
 @end
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
+
 #endif /* TARANTOOL_OBJECT_H_INCLUDED */

@@ -29,6 +29,11 @@
  * SUCH DAMAGE.
  */
 #include <util.h>
+
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 /*
  * Box - data storage (spaces, indexes) and query
  * processor (INSERT, UPDATE, DELETE, SELECT, Lua)
@@ -93,4 +98,9 @@ const char *box_status(void);
  */
 void
 box_leave_local_standby_mode(void *data __attribute__((unused)));
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
+
 #endif /* INCLUDES_TARANTOOL_BOX_H */

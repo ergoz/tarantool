@@ -32,6 +32,10 @@
 #include <stdint.h>
 #include "util.h"
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 struct tbuf;
 
 struct palloc_pool;
@@ -54,5 +58,9 @@ const char *palloc_name(struct palloc_pool *);
 size_t palloc_allocated(struct palloc_pool *);
 
 void palloc_stat(struct tbuf *buf);
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_PALLOC_H_INCLUDED */

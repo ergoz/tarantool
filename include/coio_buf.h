@@ -30,6 +30,11 @@
  */
 #include "coio.h"
 #include "iobuf.h"
+
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 /** Buffered cooperative IO */
 
 /** Read at least sz bytes, buffered. Return 0 in case of EOF. */
@@ -51,5 +56,9 @@ coio_breadn(struct ev_io *coio, struct ibuf *buf, size_t sz)
 	buf->end += n;
 	return n;
 }
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_COIO_BUF_H_INCLUDED */

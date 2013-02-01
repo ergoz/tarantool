@@ -32,6 +32,10 @@
 #include <stdbool.h>
 #include "util.h" /* for u64 */
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 struct tbuf;
 
 bool salloc_init(size_t size, size_t minimal, double factor);
@@ -59,5 +63,9 @@ typedef int (*salloc_stat_cb)(const struct slab_cache_stats *st, void *ctx);
 
 int
 salloc_stat(salloc_stat_cb cb, struct slab_arena_stats *astat, void *cb_ctx);
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_SALLOC_H_INCLUDED */

@@ -39,6 +39,10 @@
 #include <fcntl.h>
 #include "exception.h"
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 enum { SERVICE_NAME_MAXLEN = 32 };
 
 @interface SocketError: SystemError
@@ -103,5 +107,9 @@ sio_add_to_iov(struct iovec *iov, ssize_t size)
 	iov->iov_len += size;
 	iov->iov_base -= size;
 }
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_SIO_H_INCLUDED */

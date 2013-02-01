@@ -41,6 +41,10 @@
 #include <util.h>
 #include <rlist.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 /**
  * Asynchronous IO Tasks (libeio wrapper)
  *
@@ -64,5 +68,9 @@ void coeio_init(void);
 void coeio_free(void);
 struct coeio_req *coeio_custom(void (*f)(eio_req*), void *arg);
 void *coeio_wait(struct coeio_req *r);
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_COEIO_H_INCLUDED */

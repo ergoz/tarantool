@@ -30,6 +30,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 #if !MH_SOURCE
 #define MH_UNDEF
 #endif
@@ -103,3 +107,7 @@ mh_strptr_hash(const mh_node_t *a, mh_hash_arg_t arg) {
 #define mh_eq_arg_t void *
 #define mh_eq(a, b, arg) (lstrcmp(a->key, b->key) == 0)
 #include <mhash.h>
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */

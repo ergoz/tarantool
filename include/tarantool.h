@@ -31,6 +31,10 @@
 #include <stdbool.h>
 #include <util.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 struct tarantool_cfg;
 struct tbuf;
 
@@ -52,4 +56,9 @@ char **init_set_proc_title(int argc, char **argv);
 void free_proc_title(int argc, char **argv);
 void set_proc_title(const char *format, ...);
 void title(const char *fmt, ...);
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
+
 #endif /* TARANTOOL_H_INCLUDED */

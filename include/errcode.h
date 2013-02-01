@@ -32,6 +32,10 @@
 
 #include <util.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 struct errcode_record {
 	const char *errstr;
 	const char *errdesc;
@@ -144,5 +148,8 @@ static inline const char *tnt_errcode_desc(uint32_t errcode)
 	return tnt_error_codes[errcode].errdesc;
 }
 
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_ERRCODE_H_INCLUDED */

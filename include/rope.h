@@ -31,6 +31,10 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 typedef unsigned int rsize_t;
 typedef int rssize_t;
 typedef void *(*rope_split_func)(void *, size_t, size_t);
@@ -254,5 +258,9 @@ rope_check(struct rope *rope);
 /** Pretty print a rope. */
 void
 rope_pretty_print(struct rope *rope, void (*print_leaf)(void *, size_t));
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* INCLUDES_TARANTOOL_ROPE_H */

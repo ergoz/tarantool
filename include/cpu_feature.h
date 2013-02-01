@@ -31,6 +31,10 @@
 #include <sys/types.h>
 #include <stdbool.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 /* Check whether CPU supports SSE 4.2 (needed to compute CRC32 in hardware).
  *
  * @param	feature		indetifier (see above) of the target feature
@@ -51,6 +55,9 @@ bool sse42_enabled_cpu();
  */
 u_int32_t crc32c_hw(u_int32_t crc, const unsigned char *buf, unsigned int len);
 
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_CPU_FEATURES_H */
 

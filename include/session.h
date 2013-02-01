@@ -29,6 +29,10 @@
 #include <inttypes.h>
 #include <stdbool.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 /**
  * Abstraction of a single user session:
  * for now, only provides accounting of established
@@ -104,3 +108,7 @@ session_init();
 
 void
 session_free();
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */

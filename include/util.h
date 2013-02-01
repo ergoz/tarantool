@@ -34,6 +34,10 @@
 #include <unistd.h>
 #include <inttypes.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 #ifndef NDEBUG
 #define TRASH(ptr) memset(ptr, '#', sizeof(*ptr))
 #else
@@ -168,5 +172,9 @@ memmem(const void *block, size_t blen, const void *pat, size_t plen);
 void *
 memrchr(const void *s, int c, size_t n);
 #endif /* HAVE_MEMRCHR */
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_UTIL_H_INCLUDED */

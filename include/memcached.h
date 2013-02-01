@@ -30,6 +30,10 @@
  */
 #include <stdarg.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 struct tarantool_cfg;
 
 void
@@ -43,5 +47,9 @@ memcached_check_config(struct tarantool_cfg *conf);
 
 void memcached_start_expire();
 void memcached_stop_expire();
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_MEMCACHED_H_INCLUDED */

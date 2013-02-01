@@ -41,6 +41,10 @@
 #include <util.h>
 #include <rlist.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 /**
  * Asynchronous IO Tasks (libeio wrapper)
  *
@@ -67,5 +71,9 @@ struct asio *asio_create(void (*f)(eio_req*), void *arg);
 bool asio_wait(struct asio *a, ev_tstamp timeout);
 void asio_cancel(struct asio *a);
 void asio_finish(struct asio *a);
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_ASIO_H_INCLUDED */

@@ -31,6 +31,11 @@
 #include <sys/uio.h>
 #include <stdbool.h>
 #include "util.h"
+
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 #include "third_party/queue.h"
 
 struct ev_io;
@@ -245,5 +250,9 @@ iobuf_init_readahead(int readahead)
 }
 
 /* }}} */
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_IOBUF_H_INCLUDED */

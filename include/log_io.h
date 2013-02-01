@@ -35,6 +35,10 @@
 #include "tbuf.h"
 #include "tarantool_ev.h"
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 extern const u32 default_version;
 
 enum log_format { XLOG = 65534, SNAP = 65535 };
@@ -156,5 +160,9 @@ int
 inprogress_log_unlink(char *filename);
 int
 inprogress_log_rename(struct log_io *l);
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_LOG_IO_H_INCLUDED */

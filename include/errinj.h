@@ -31,6 +31,10 @@
 #include "exception.h"
 #include "util.h"
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 struct errinj {
 	char *name;
 	bool state;
@@ -70,5 +74,9 @@ void errinj_info(struct tbuf *out);
 	ERROR_INJECT(ID, tnt_raise(ErrorInjection, :#ID))
 
 #define ERROR_INJECT_RETURN(ID) ERROR_INJECT(ID, return -1)
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TATRANTOOL_ERRINJ_H_INCLUDED */

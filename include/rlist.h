@@ -29,6 +29,10 @@
  * SUCH DAMAGE.
  */
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 /**
  * list entry and head structure
  */
@@ -265,5 +269,8 @@ delete from one list and add_tail as another's head
 		&item->member != (head); \
 		item = rlist_prev_entry((item), member))
 
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_RLIST_H_INCLUDED */

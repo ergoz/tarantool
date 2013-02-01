@@ -43,6 +43,10 @@
 #endif /* defined(HAVE_FFSL) || defined(HAVE_FFSLL) */
 #include <limits.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 /**
  * @cond false
  * @brief Naive implementation of ctz.
@@ -302,5 +306,9 @@ bit_index_u32(uint32_t x, int *indexes, int offset);
  */
 int *
 bit_index_u64(uint64_t x, int *indexes, int offset);
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_LIB_BIT_BIT_H_INCLUDED */

@@ -29,6 +29,11 @@
  * SUCH DAMAGE.
  */
 #include "evio.h"
+
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 /*
  * Co-operative I/O
  * Yield the current fiber until IO is ready.
@@ -77,5 +82,9 @@ void
 coio_service_init(struct coio_service *service, const char *name,
 		  const char *host, int port,
 		  void (*handler)(va_list ap), void *handler_param);
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_COIO_H_INCLUDED */

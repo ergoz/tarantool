@@ -33,6 +33,10 @@
 #include "errcode.h"
 #include "say.h"
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 /** The base class for all exceptions.
  *
  * Note: implements garbage collection (see +alloc
@@ -117,5 +121,9 @@
 	[exception init __VA_ARGS__];					\
 	@throw exception;						\
 } while (0)
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_EXCEPTION_H_INCLUDED */

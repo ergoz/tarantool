@@ -30,6 +30,10 @@
  */
 #include <tbuf.h>
 
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
 void stat_init(void);
 void stat_free(void);
 void stat_cleanup(int base, size_t max_idx);
@@ -41,5 +45,9 @@ void stat_collect(int base, int name, i64 value);
 typedef int (*stat_cb)(const char *name, int rps, i64 total, void *cb_ctx);
 
 int stat_foreach(stat_cb cb, void *cb_ctx);
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_STAT_H_INCLUDED */

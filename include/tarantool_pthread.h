@@ -31,6 +31,10 @@
 
 #include "config.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
 #if defined(HAVE_NON_C99_PTHREAD_H)
 /*
  * Old versions of glibc (pre-2006) use "extern __inline" for this function.
@@ -194,5 +198,9 @@ __pthread_cleanup_routine(struct __pthread_cleanup_frame *__frame);
 ({	int e = pthread_join(thread, ret);		\
 	tt_pthread_error(e);				\
 })
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_PTHREAD_H_INCLUDED */
