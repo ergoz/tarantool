@@ -174,3 +174,65 @@ varint32_sizeof(u32 value)
 		return 4;
 	return 5;
 }
+
+u32
+load_varint32_s(const void **data, size_t size)
+{
+	assert(data != NULL && *data != NULL);
+	const u8 *b = *data;
+
+	if (unlikely(size < 1))
+		tnt_raise(IllegalParams, :"varint is too short (expected 1+ bytes)");
+
+	if (!(b[0] & 0x80)) {
+		*data += 1;
+		return (b[0] & 0x7f);
+	}
+
+	if (unlikely(size < 2))
+		tnt_raise(IllegalParams, :"varint is too short (expected 2+ bytes)");
+
+	if (!(b[1] & 0x80)) {
+		*data += 2;
+		return (b[0] & 0x7f) << 7 | (b[1] & 0x7f);
+	}
+
+	if (unlikely(size < 3))
+		tnt_raise(IllegalParams, :"BER int is too short (expected 3+ bytes)");
+
+	if (!(b[2] & 0x80)) {
+		*data += 3;
+		return (b[0] & 0x7f) << 14 | (b[1] & 0x7f) << 7 | (b[2] & 0x7f);
+	}
+
+	if (unlikely(size < 4))
+		tnt_raise(IllegalParams, :"BER int is too short (expected 4+ bytes)");
+
+	if (!(b[3] & 0x80)) {
+		*data += 4;
+		return (b[0] & 0x7f) << 21 | (b[1] & 0x7f) << 14 |
+			(b[2] & 0x7f) << 7 | (b[3] & 0x7f);
+	}
+
+	if (unlikely(size < 5))
+		tnt_raise(IllegalParams, :"BER int is too short (expected 5+ bytes)");
+
+	if (!(b[4] & 0x80)) {
+		*data += 5;
+		return (b[0] & 0x7f) << 28 | (b[1] & 0x7f) << 21 |
+			(b[2] & 0x7f) << 14 | (b[3] & 0x7f) << 7 | (b[4] & 0x7f);
+	}
+
+	tnt_raise(IllegalParams, :"incorrect BER integer format");
+}
+
+size_t
+tuple_range_size(const void **begin, const void *end, size_t count)
+{
+	const void *start = *begin;
+	while (*begin < end && count-- > 0) {
+		size_t len = load_varint32(begin);
+		*begin += len;
+	}
+	return *begin - start;
+}

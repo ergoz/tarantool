@@ -105,7 +105,7 @@ static inline void
 sio_add_to_iov(struct iovec *iov, ssize_t size)
 {
 	iov->iov_len += size;
-	iov->iov_base -= size;
+	iov->iov_base = (char *) iov->iov_base - size;
 }
 
 #if defined(__cplusplus)

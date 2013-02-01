@@ -59,19 +59,14 @@ static inline void tbuf_ensure(struct tbuf *e, size_t required)
 		tbuf_ensure_resize(e, required);
 }
 
-static inline void tbuf_append(struct tbuf *b, const void *data, size_t len)
-{
-	tbuf_ensure(b, len + 1); /* +1 for trailing '\0' */
-	memcpy(b->data + b->size, data, len);
-	b->size += len;
-	*(((char *)b->data) + b->size) = '\0';
-}
+void
+tbuf_append(struct tbuf *b, const void *data, size_t len);
 
 static inline char *
-tbuf_str(struct tbuf *tbuf) { return tbuf->data; }
+tbuf_str(struct tbuf *tbuf) { return (char *) tbuf->data; }
 
 static inline void *
-tbuf_end(struct tbuf *tbuf) { return tbuf->data + tbuf->size; }
+tbuf_end(struct tbuf *tbuf) { return (char *) tbuf->data + tbuf->size; }
 
 static inline size_t
 tbuf_unused(const struct tbuf *tbuf) { return tbuf->capacity - tbuf->size; }

@@ -214,8 +214,8 @@ rope_iter_init(struct rope_iter *it, struct rope *rope)
 static inline struct rope_iter *
 rope_iter_new(struct rope *rope)
 {
-	struct rope_iter *it = rope->alloc(rope->alloc_ctx,
-					     sizeof(struct rope_iter));
+	struct rope_iter *it = (struct rope_iter *)
+			rope->alloc(rope->alloc_ctx, sizeof(struct rope_iter));
 
 	if (it == NULL)
 		return NULL;

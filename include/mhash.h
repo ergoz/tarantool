@@ -238,6 +238,7 @@ static inline mh_int_t
 _mh(put)(struct _mh(t) *h, const mh_node_t *node,
 	 mh_hash_arg_t hash_arg, mh_eq_arg_t eq_arg, int *ret)
 {
+	int exist = 0;
 	mh_int_t x = mh_end(h);
 	if (h->size == h->n_buckets)
 		/* no one free elements in the hash table */
@@ -261,7 +262,7 @@ _mh(put)(struct _mh(t) *h, const mh_node_t *node,
 #endif
 
 	x = put_slot(h, node, hash_arg, eq_arg);
-	int exist = mh_exist(h, x);
+	exist = mh_exist(h, x);
 	if (ret)
 		*ret = !exist;
 

@@ -153,6 +153,15 @@ tbuf_ltrim(struct tbuf *b, size_t count)
 }
 
 void
+tbuf_append(struct tbuf *b, const void *data, size_t len)
+{
+	tbuf_ensure(b, len + 1); /* +1 for trailing '\0' */
+	memcpy(b->data + b->size, data, len);
+	b->size += len;
+	*(((char *)b->data) + b->size) = '\0';
+}
+
+void
 tbuf_reset(struct tbuf *b)
 {
 	tbuf_assert(b);
