@@ -62,7 +62,7 @@ static struct space *
 read_space(struct tbuf *data)
 {
 	u32 space_no = read_u32(data);
-	return space_find(space_no);
+	return space_find_by_no(space_no);
 }
 
 enum dup_replace_mode
@@ -94,13 +94,13 @@ execute_replace(struct request *request, struct txn *txn)
 
 	@try {
 		space_validate_tuple(sp, new_tuple);
-		enum dup_replace_mode mode = dup_replace_mode(request->flags);
-		txn_replace(txn, sp, NULL, new_tuple, mode);
-
 	} @catch (tnt_Exception *e) {
 		tuple_free(new_tuple);
 		@throw;
 	}
+
+	enum dup_replace_mode mode = dup_replace_mode(request->flags);
+	txn_replace(txn, sp, NULL, new_tuple, mode);
 }
 
 /** {{{ UPDATE request implementation.
@@ -239,7 +239,7 @@ struct update_field {
 	 * Length of the "tail" in the old tuple from end
 	 * of old data to the beginning of the field in the
 	 * next update_field structure.
-         */
+	 */
 	u32 tail_len;
 };
 
@@ -701,7 +701,7 @@ execute_update(struct request *request, struct txn *txn)
 
 	read_key(data, &key, &key_part_count);
 
-	Index *pk = space_index(sp, 0);
+	Index *pk = index_find_by_no(sp, 0);
 	/* Try to find the tuple by primary key. */
 	struct tuple *old_tuple = [pk findByKey :key :key_part_count];
 
@@ -720,12 +720,12 @@ execute_update(struct request *request, struct txn *txn)
 	@try {
 		do_update_ops(rope, new_tuple);
 		space_validate_tuple(sp, new_tuple);
-		txn_replace(txn, sp, old_tuple, new_tuple, DUP_INSERT);
-
 	} @catch (tnt_Exception *e) {
 		tuple_free(new_tuple);
 		@throw;
 	}
+
+	txn_replace(txn, sp, old_tuple, new_tuple, DUP_INSERT);
 }
 
 /** }}} */
@@ -736,7 +736,7 @@ execute_select(struct request *request, struct port *port)
 	struct tbuf *data = request->data;
 	struct space *sp = read_space(data);
 	u32 index_no = read_u32(data);
-	Index *index = index_find(sp, index_no);
+	Index *index = index_find_by_no(sp, index_no);
 	u32 offset = read_u32(data);
 	u32 limit = read_u32(data);
 	u32 count = read_u32(data);
@@ -792,7 +792,7 @@ execute_delete(struct request *request, struct txn *txn)
 	void *key;
 	read_key(data, &key, &key_part_count);
 	/* Try to find tuple by primary key */
-	Index *pk = space_index(sp, 0);
+	Index *pk = index_find_by_no(sp, 0);
 	struct tuple *old_tuple = [pk findByKey :key :key_part_count];
 
 	if (old_tuple == NULL)

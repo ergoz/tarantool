@@ -32,6 +32,8 @@
 #include <stdbool.h>
 #include <util.h>
 
+#include <box/box.h>
+
 struct tuple;
 struct space;
 
@@ -160,6 +162,10 @@ enum dup_replace_mode {
  @public
 	/* Index owner space */
 	struct space *space;
+	/* Index no */
+	u32 no;
+	/* Name (varint32 + data) */
+	char name[BOX_INDEX_NAME_MAXLEN];
 	/* Description of a possibly multipart key. */
 	struct key_def *key_def;
 	/*

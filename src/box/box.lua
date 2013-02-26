@@ -266,8 +266,10 @@ function box.bless_space(space)
     setmetatable(space, space_mt)
     if type(space.index) == 'table' and space.enabled then
         for j, index in pairs(space.index) do
-            rawset(index, 'idx', box.index.new(space.n, j))
-            setmetatable(index, index_mt)
+            if (type(j) == "number") then
+                index.idx = box.index.new(space.n, j);
+                setmetatable(index, index_mt)
+            end
         end
     end
 end

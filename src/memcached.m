@@ -46,8 +46,8 @@
 #include "coio_buf.h"
 
 #define STAT(_)					\
-        _(MEMC_GET, 1)				\
-        _(MEMC_GET_MISS, 2)			\
+	_(MEMC_GET, 1)				\
+	_(MEMC_GET_MISS, 2)			\
 	_(MEMC_GET_HIT, 3)			\
 	_(MEMC_EXPIRED_KEYS, 4)
 
@@ -447,8 +447,8 @@ memcached_init(const char *bind_ipaddr, int memcached_port)
 
 	stat_base = stat_register(memcached_stat_strs, memcached_stat_MAX);
 
-	struct space *sp = space_by_n(cfg.memcached_space);
-	memcached_index = space_index(sp, 0);
+	struct space *sp = space_find_by_no(cfg.memcached_space);
+	memcached_index = index_find_by_no(sp, 0);
 
 	/* run memcached server */
 	static struct coio_service memcached;
@@ -456,41 +456,6 @@ memcached_init(const char *bind_ipaddr, int memcached_port)
 			  bind_ipaddr, memcached_port,
 			  memcached_handler, NULL);
 	evio_service_start(&memcached.evio_service);
-}
-
-void
-memcached_space_init()
-{
-        if (cfg.memcached_port == 0)
-                return;
-
-
-	/* Configure memcached index key. */
-	struct key_def *key_def = malloc(sizeof(struct key_def));
-	key_def->part_count = 1;
-	key_def->is_unique = true;
-	key_def->type = HASH;
-
-	key_def->parts = malloc(sizeof(struct key_part));
-	key_def->cmp_order = malloc(sizeof(u32));
-
-	if (key_def->parts == NULL || key_def->cmp_order == NULL)
-		panic("out of memory when configuring memcached_space");
-
-	key_def->parts[0].fieldno = 0;
-	key_def->parts[0].type = STRING;
-
-	key_def->max_fieldno = 1;
-	key_def->cmp_order[0] = 0;
-
-
-	struct space *memc_s =
-		space_create(cfg.memcached_space, key_def, 1, 4);
-
-	Index *memc_index = [Index alloc: HASH :key_def :memc_s];
-	space_set_index(memc_s, 0, memc_index);
-
-	[memc_index init: key_def :memc_s];
 }
 
 /** Delete a bunch of expired keys. */

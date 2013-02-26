@@ -26,12 +26,28 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+#include "pickle.h"
 #include "box_lua_space.h"
 #include "space.h"
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
 #include <say.h>
+#include <tbuf.h>
+#include <fiber.h>
+#include <lua/init.h>
+
+static int
+lbox_spaces_index(struct lua_State *L);
+static int
+lbox_pushspace(struct lua_State *L, struct space *space);
+
+static const char *lbox_spaces_name = "box.spaces";
+
+static const struct luaL_reg lbox_spaces_meta[] = {
+	{"__index", lbox_spaces_index},
+	{NULL, NULL}
+};
 
 /**
  * Make a single space available in Lua,
@@ -40,7 +56,7 @@
  * @return A new table representing a space on top of the Lua
  * stack.
  */
-int
+static int
 lbox_pushspace(struct lua_State *L, struct space *space)
 {
 	lua_newtable(L);
@@ -53,6 +69,14 @@ lbox_pushspace(struct lua_State *L, struct space *space)
 	/* space.n */
 	lua_pushstring(L, "n");
 	lua_pushnumber(L, space->no);
+	lua_settable(L, -3);
+
+	/* space name */
+	lua_pushstring(L, "name");
+	assert (space->name != NULL);
+	const void *name = space->name;
+	u32 name_len = load_varint32(&name);
+	lua_pushlstring(L, name, name_len);
 	lua_settable(L, -3);
 
 	/* all exists spaces are enabled */
@@ -72,9 +96,26 @@ lbox_pushspace(struct lua_State *L, struct space *space)
 	 * Fill space.index table with
 	 * all defined indexes.
 	 */
-	for (int i = 0; i < space->key_count; i++) {
-		lua_pushnumber(L, i);
+	for (int i = 0; i < BOX_INDEX_MAX; i++) {
+		if (space->index[i] == NULL)
+			continue;
+
+		const void *name = space->index[i]->name;
+		assert (name != NULL);
+		u32 name_len = load_varint32(&name);
+		lua_pushinteger(L, space->index[i]->no);
+
 		lua_newtable(L);		/* space.index[i] */
+
+		/* index_no */
+		lua_pushstring(L, "n");
+		lua_pushnumber(L, space->index[i]->no);
+		lua_settable(L, -3);
+
+		/* index name */
+		lua_pushstring(L, "name");
+		lua_pushlstring(L, name, name_len);
+		lua_settable(L, -3);
 
 		lua_pushstring(L, "unique");
 		lua_pushboolean(L, space->key_defs[i].is_unique);
@@ -118,9 +159,11 @@ lbox_pushspace(struct lua_State *L, struct space *space)
 
 		lua_settable(L, -3);	/* space[i].key_field */
 
-		lua_settable(L, -3);	/* space[i] */
+		lua_pushlstring(L, name, name_len);
+		lua_pushvalue(L, -2);
+		lua_settable(L, -5);	/* space[i] */
+		lua_settable(L, -3);	/* space[name] */
 	}
-
 	lua_settable(L, -3);	/* push space.index */
 
 	lua_getfield(L, LUA_GLOBALSINDEX, "box");
@@ -134,29 +177,81 @@ lbox_pushspace(struct lua_State *L, struct space *space)
 	return 1;
 }
 
-/**
- * A callback adapter for space_foreach().
- */
-static void
-lbox_add_space(struct space *space, struct lua_State *L)
+static int
+lbox_spaces_index(struct lua_State *L)
 {
-	lua_pushnumber(L, space->no);
-	lbox_pushspace(L, space);
-	lua_settable(L, -3);
+	struct space *sp = NULL;
+	if (lua_type(L, 2) == LUA_TNUMBER) {
+		lua_Integer req = lua_tointeger(L, 2);
+		if (req >= 0 && req < UINT_MAX) {
+			sp = space_find_by_no((u32) req);
+		}
+	} else {
+		size_t len = 0;
+		const char *req = lua_tolstring(L, 2, &len);
+		struct tbuf *buf = tbuf_new(fiber->gc_pool);
+		write_varint32(buf, len);
+		tbuf_append(buf, req, len);
+		sp = space_find_by_name(tbuf_str(buf));
+	}
+
+	if (sp == NULL) {
+		lua_pushnil(L);
+		return 1;
+	}
+
+	lbox_pushspace(L, sp);
+	lua_pushvalue(L, -1);
+	lua_rawseti(L, 1, sp->no);
+
+	const void *name = sp->name;
+	u32 name_len = load_varint32(&name);
+	lua_pushlstring(L, name, name_len);
+	lua_pushvalue(L, -2);
+	lua_rawset(L, 1);
+
+	return 1;
 }
 
-/**
- * Make all spaces available in Lua via box.space
- * array.
- */
+void
+box_lua_space_cache_clear(struct lua_State *L, struct space *sp)
+{
+	lua_getfield(L, LUA_GLOBALSINDEX, "box");
+	if (!lua_istable(L, -1))
+		return;
+
+	lua_getfield(L, -1, "space");
+	if (!lua_istable(L, -1))
+		return;
+
+	lua_pushnil(L);
+	lua_rawseti(L, -2, sp->no);
+
+	const void *name;
+	u32 name_len;
+	load_field_str(sp->name, &name, &name_len);
+	if (name_len == 0)
+		return;
+
+	lua_pushlstring(L, name, name_len);
+	lua_pushnil(L);
+	lua_rawset(L, -3);
+}
+
 void
 box_lua_load_cfg(struct lua_State *L)
 {
 	lua_getfield(L, LUA_GLOBALSINDEX, "box");
-	lua_pushstring(L, "space");
+	if (!lua_istable(L, -1))
+		return;
+
 	lua_newtable(L);
-	space_foreach((void *)lbox_add_space, L);	/* fill box.space */
-	lua_settable(L, -3);
+	lua_setfield(L, -2, "space");
+
+	lua_getfield(L, -1, "space");
+	tarantool_lua_register_type(L, lbox_spaces_name, lbox_spaces_meta);
+	luaL_register(L, lbox_spaces_name, lbox_spaces_meta);
+
+	lua_setmetatable(L, -2);
 	lua_pop(L, 1);
-	assert(lua_gettop(L) == 0);
 }

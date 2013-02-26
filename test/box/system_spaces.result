@@ -1,0 +1,436 @@
+
+#-----------------------------------------------------------------------------#
+# System spaces: test conversion from the config file
+#-----------------------------------------------------------------------------#
+
+lua for v in box.space['sys_space'].index['pk']:iterator(box.index.ALL) do print(v) end
+---
+0: {'0', 0, 0, 0, 1}
+1: {'1', 0, 0, 0, 1, 1, 1, 2, 2, 3, 3}
+4: {'4', 0, 0, 0, 1, 5, 1, 10, 1, 15, 1}
+5: {'5', 5, 0, 0, 1}
+6: {'6', 0, 0, 2, 1}
+7: {'7', 0, 0, 0, 1, 1, 2, 2, 2, 3, 3, 4, 3, 5, 3, 6, 3, 8, 1}
+23: {'memcached', 4, 0, 0, 3, 2, 3, 3, 3}
+4294967293: {'sys_index', 0, 0, 0, 1, 1, 1, 2, 3, 3, 1, 4, 1}
+4294967294: {'sys_space', 0, 0, 0, 1, 1, 3, 2, 1, 3, 1}
+...
+lua for v in box.space['sys_index'].index['pk']:iterator(box.index.ALL) do print(v) end
+---
+0: {0, 27504, 0, 1, 0}
+1: {0, 27504, 1, 1, 0}
+1: {1, '1', 1, 1, 2, 1, 3}
+4: {0, 27504, 0, 1, 0}
+4: {1, '1', 0, 1, 5}
+4: {2, '2', 0, 1, 10}
+4: {3, '3', 1, 0, 15}
+5: {0, 27504, 1, 1, 0}
+6: {0, 27504, 1, 1, 2}
+7: {0, 27504, 1, 1, 0}
+7: {1, '1', 1, 1, 1}
+7: {2, '2', 1, 0, 2}
+7: {3, '3', 1, 0, 3, 4}
+7: {4, '4', 1, 0, 6, 5}
+7: {5, '5', 1, 0, 8}
+7: {6, '6', 1, 1, 6, 5, 3, 4, 8}
+23: {0, 27504, 0, 1, 0}
+4294967293: {0, 27504, 1, 1, 0, 1}
+4294967293: {1, 1701667182, 1, 1, 2, 0}
+4294967294: {0, 27504, 1, 1, 0}
+4294967294: {1, 1701667182, 1, 1, 1}
+...
+
+#-----------------------------------------------------------------------------#
+# System spaces: check trigger test - basic
+#-----------------------------------------------------------------------------#
+
+lua print(box.space[0].name)
+---
+0
+...
+lua print(box.space['0'].name)
+---
+0
+...
+lua box.replace(box.space.sys_space.n, box.space.sys_space.n, '0', 0, 0)
+---
+error: 'Illegal parameters, pk=4294967294: cannot change system spaces'
+...
+lua box.delete(box.space.sys_space.n, box.space.sys_index.n)
+---
+error: 'Illegal parameters, pk=4294967293: cannot change system spaces'
+...
+lua box.replace(box.space.sys_index.n, box.space.sys_space.n, 0, '0', 0, 0)
+---
+error: 'Illegal parameters, at least one field is needed'
+...
+lua box.delete(box.space.sys_index.n, box.space.sys_index.n, 0)
+---
+error: 'Illegal parameters, pk=4294967293,0: cannot change system spaces'
+...
+lua box.replace(box.space.sys_space.n, 4294967295, '0', 0, 0)
+---
+error: 'Illegal parameters, invalid space_no'
+...
+lua box.replace(box.space.sys_space.n, 0, string.rep('*', 126), 0, 0, 0, 1)
+---
+error: 'Illegal parameters, name is too long'
+...
+lua box.replace(box.space.sys_space.n, 0, 'test', 0, 0, 0, 1)
+---
+ - 0: {1953719668, 0, 0, 0, 1}
+...
+lua print(box.space['0'].name)
+---
+error: 'Space 0 does not exist'
+...
+lua print(box.space['test'].name)
+---
+test
+...
+lua box.replace(box.space.sys_space.n, 666, 'test', 0, 0, 0, 1, 0, 1)
+---
+error: 'Illegal parameters, field_def=1 duplicate field_no'
+...
+lua box.replace(box.space.sys_space.n, 0, '0', 0, 0, 0, 0)
+---
+error: 'Illegal parameters, field_def=0 invalid field_type'
+...
+lua box.replace(box.space.sys_space.n, 0, '0', 0, 0, 2, 3)
+---
+error: 'Illegal parameters, pk=0: field 0 is not defined as required by index 0'
+...
+lua box.replace(box.space.sys_index.n, 0, 0, string.rep('*', 126), 0, 1, 0)
+---
+error: 'Illegal parameters, name is too long'
+...
+lua box.replace(box.space.sys_index.n, 0, 0, 'kkk', 0, 1, 0)
+---
+ - 0: {0, 'kkk', 0, 1, 0}
+...
+lua print(box.space[0].index['kkk'].type)
+---
+HASH
+...
+lua print(box.space[0].index[0].type)
+---
+HASH
+...
+lua print(box.space[0].index['pk'])
+---
+nil
+...
+lua box.replace(box.space.sys_index.n, 0, 0, 'kkk', 1, 0, 0)
+---
+error: 'Illegal parameters, pk=0,0: primary key must be unique'
+...
+lua box.replace(box.space.sys_index.n, 0, 1, 'kkk', 0, 1)
+---
+error: 'Illegal parameters, at least one field is needed'
+...
+lua box.replace(box.space.sys_index.n, 0, 1, 'kkk', 0, 1, 5)
+---
+error: 'Illegal parameters, pk=0: field 5 is not defined as required by index 1'
+...
+lua box.replace(box.space.sys_index.n, 0, 1, 'kkk', 0, 0, 1)
+---
+error: 'Illegal parameters, pk=0,1: this index is unique only'
+...
+lua box.replace(box.space.sys_index.n, 0, 1, 'kkk', 0, 0, 1, 2)
+---
+error: 'Illegal parameters, pk=0,1: this index is single-part only'
+...
+lua box.replace(box.space.sys_index.n, 0, 1, 'kkk', 999, 1, 1)
+---
+error: 'Illegal parameters, pk=0,1: invalid index type'
+...
+lua box.replace(box.space.sys_index.n, 0, 4294967295, 'kkk', 999, 1, 1)
+---
+error: 'Illegal parameters, invalid index_no'
+...
+lua box.replace(box.space.sys_index.n, 4294967295, 0, 'kkk', 999, 1, 1)
+---
+error: 'Illegal parameters, invalid space_no'
+...
+lua box.replace(box.space.sys_index.n, 666, 0, 'kkk', 999, 1, 1)
+---
+error: 'Illegal parameters, pk=666,0: space does not exist'
+...
+
+#-----------------------------------------------------------------------------#
+# System spaces: check trigger test - a space with data
+#-----------------------------------------------------------------------------#
+
+lua box.insert(0, 1, 2, 3)
+---
+ - 1: {2, 3}
+...
+lua box.replace(box.space.sys_space.n, 0, '0', 0, 0, 0, 1)
+---
+ - 0: {'0', 0, 0, 0, 1}
+...
+lua box.replace(box.space.sys_space.n, 0, '0', 2, 0, 0, 1)
+---
+error: 'Illegal parameters, pk=0: arity can only be changed to 0, because space is not empty'
+...
+lua box.replace(box.space.sys_space.n, 0, '0', 0, 4, 0, 1)
+---
+error: 'Illegal parameters, pk=0: flags are read-only, because space is not empty'
+...
+lua box.replace(box.space.sys_space.n, 0, '0', 0, 0, 0, 1, 1, 1)
+---
+error: 'Illegal parameters, pk=0: field defs are read-only, because space is not empty'
+...
+lua box.replace(box.space.sys_space.n, 0, '0', 0, 0, 0, 2)
+---
+error: 'Illegal parameters, pk=0: field defs are read-only, because space is not empty'
+...
+lua box.replace(box.space.sys_index.n, 0, 0, 'pk', 0, 1, 0)
+---
+ - 0: {0, 27504, 0, 1, 0}
+...
+lua box.replace(box.space.sys_index.n, 0, 0, 'pk', 1, 1, 0)
+---
+error: 'Illegal parameters, pk=0,0: cannot change the index, because space is not empty'
+...
+lua box.replace(box.space.sys_index.n, 0, 0, 'pk', 0, 1, 0, 0)
+---
+error: 'Illegal parameters, pk=0,0: this index is single-part only'
+...
+lua box.replace(box.space.sys_index.n, 0, 0, 'pk', 1, 1, 0)
+---
+error: 'Illegal parameters, pk=0,0: cannot change the index, because space is not empty'
+...
+
+#-----------------------------------------------------------------------------#
+# System spaces: check trigger test - space create/delete
+#-----------------------------------------------------------------------------#
+
+lua box.replace(box.space.sys_space.n, 0, 'test', 0, 0, 0, 1)
+---
+ - 0: {1953719668, 0, 0, 0, 1}
+...
+lua box.insert(box.space.sys_space.n, 666, 'test', 0, 0, 0, 1)
+---
+error: 'Duplicate key exists in unique index 1'
+...
+lua box.insert(box.space.sys_space.n, 0, 'xxx', 0, 0, 0, 1)
+---
+error: 'Duplicate key exists in unique index 0'
+...
+lua box.insert(box.space.sys_space.n, 100, 'new', 0, 0, 0, 1, 1, 3)
+---
+ - 100: {'new', 0, 0, 0, 1, 1, 3}
+...
+lua box.space[100].name
+---
+error: 'Illegal parameters, primary key is not configured'
+...
+lua box.space['new'].name
+---
+error: 'Illegal parameters, primary key is not configured'
+...
+lua box.insert(box.space.sys_index.n, 100, 0, 'pk', 1, 1, 0, 1)
+---
+ - 100: {0, 27504, 1, 1, 0, 1}
+...
+lua box.space[100].name
+---
+ - new
+...
+lua box.space['new'].name
+---
+ - new
+...
+lua box.space['new'].n
+---
+ - 100
+...
+lua box.space['new'].enabled
+---
+ - true
+...
+lua box.space['new'].cardinality
+---
+ - 0
+...
+lua box.space['new'].index['pk'].name
+---
+ - pk
+...
+lua box.space['new'].index['pk'].n
+---
+ - 0
+...
+lua box.space['new'].index['pk'].type
+---
+ - TREE
+...
+lua box.space['new'].index['pk'].unique
+---
+ - true
+...
+lua box.space['new'].index['pk'].key_field[0].fieldno
+---
+ - 0
+...
+lua box.space['new'].index['pk'].key_field[0].type
+---
+ - NUM
+...
+lua box.space['new'].index['pk'].key_field[1].fieldno
+---
+ - 1
+...
+lua box.space['new'].index['pk'].key_field[1].type
+---
+ - STR
+...
+lua box.space['new'].index['pk']:min()
+---
+ - nil
+...
+lua box.space['new']:truncate()
+---
+...
+lua for v in box.space['new'].index['pk']:iterator() do print(v) end
+---
+...
+lua box.insert(box.space.sys_index.n, 100, 1, 'test1', 0, 1, 1)
+---
+ - 100: {1, 'test1', 0, 1, 1}
+...
+lua box.space['new'].index['test1'].name
+---
+ - test1
+...
+lua box.space['new'].index['test1'].n
+---
+ - 1
+...
+lua box.space['new'].index['test1'].type
+---
+ - HASH
+...
+lua box.space['new'].index['test1'].unique
+---
+ - true
+...
+lua box.space['new'].index['test1'].key_field[0].fieldno
+---
+ - 1
+...
+lua box.space['new'].index['test1'].key_field[0].type
+---
+ - STR
+...
+lua box.replace(box.space.sys_space.n, 100, 'new', 0, 0, 0, 2, 1, 1)
+---
+ - 100: {'new', 0, 0, 0, 2, 1, 1}
+...
+lua box.space['new'].index['pk'].key_field[0].fieldno
+---
+ - 0
+...
+lua box.space['new'].index['pk'].key_field[0].type
+---
+ - NUM64
+...
+lua box.space['new'].index['pk'].key_field[1].fieldno
+---
+ - 1
+...
+lua box.space['new'].index['pk'].key_field[1].type
+---
+ - NUM
+...
+lua box.space['new'].index['test1'].key_field[0].fieldno
+---
+ - 1
+...
+lua box.space['new'].index['test1'].key_field[0].type
+---
+ - NUM
+...
+lua box.replace(box.space.sys_space.n, 100, 'new', 0, 0, 0, 1, 1, 3, 2, 3)
+---
+ - 100: {'new', 0, 0, 0, 1, 1, 3, 2, 3}
+...
+lua box.insert(box.space.sys_index.n, 100, 2, 'test2', 0, 1, 2)
+---
+ - 100: {2, 'test2', 0, 1, 2}
+...
+lua box.space['new'].index['test2'].key_field[0].fieldno
+---
+ - 2
+...
+lua box.space['new'].index['test2'].key_field[0].type
+---
+ - STR
+...
+lua box.delete(box.space.sys_index.n, 100, 1)
+---
+ - 100: {1, 'test1', 0, 1, 1}
+...
+lua box.space['new'].index['pk'].name
+---
+ - pk
+...
+lua box.space['new'].index['test1'].name
+---
+error: '[string "return box.space[''new''].index[''test1''].name"]:1: attempt to index field ''test1'' (a nil value)'
+...
+lua box.space['new'].index['test2'].name
+---
+ - test2
+...
+lua box.insert(box.space['new'].n, 1, 2, 3)
+---
+ - 1: {2, 3}
+...
+lua box.delete(box.space.sys_index.n, 100, 2)
+---
+error: 'Illegal parameters, pk=100,2: cannot change the index, because space is not empty'
+...
+lua box.delete(100, 1, 2)
+---
+ - 1: {2, 3}
+...
+lua box.delete(box.space.sys_index.n, 100, 2)
+---
+ - 100: {2, 'test2', 0, 1, 2}
+...
+lua box.delete(box.space.sys_index.n, 100, 1)
+---
+...
+lua box.space['new'].index['test1']
+---
+ - nil
+...
+lua box.delete(box.space.sys_index.n, 100, 0)
+---
+ - 100: {0, 27504, 1, 1, 0, 1}
+...
+lua box.space['new'].index['test1']
+---
+error: 'Illegal parameters, primary key is not configured'
+...
+lua for v in box.space['sys_index'].index['pk']:iterator(box.index.EQ, 100) do print(v) end
+---
+...
+lua box.replace(box.space.sys_space.n, 100, 'new', 0, 0, 0, 1)
+---
+ - 100: {'new', 0, 0, 0, 1}
+...
+lua box.insert(box.space.sys_index.n, 100, 0, 'pk', 1, 1, 0)
+---
+ - 100: {0, 27504, 1, 1, 0}
+...
+lua box.space['new'].index['pk'].name
+---
+ - pk
+...
+lua box.insert(box.space['new'].n, 1)
+---
+ - 1: {}
+...

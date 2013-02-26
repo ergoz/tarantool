@@ -33,7 +33,7 @@ fail:
 reload configuration
 ---
 fail:
- - at least one space or memcached port must be defined
+ - Could not accept read only 'c->space[]' option
 ...
 reload configuration
 ---

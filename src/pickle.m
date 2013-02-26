@@ -174,3 +174,69 @@ varint32_sizeof(u32 value)
 		return 4;
 	return 5;
 }
+
+const void *
+load_field_str(const void *data, const void **p_val, u32 *p_size)
+{
+	u32 len = load_varint32(&data);
+
+	if (p_size != NULL && p_val != NULL) {
+		*p_size =  len;
+		*p_val = data;
+	}
+
+	return (const char *) data + len;
+}
+
+const void *
+load_field_u32(const void *data, u32 *p_val)
+{
+	u32 len = load_varint32(&data);
+	if (len != sizeof(u32)) {
+		tnt_raise(IllegalParams, :"invalid field size");
+	}
+
+	if (p_val != NULL) {
+		*p_val = *(u32 *) data;
+	}
+
+	return (const char *) data + sizeof(u32);
+}
+
+const void *
+load_field_u64(const void *data, u64 *p_val)
+{
+	u64 len = load_varint32(&data);
+	if (len != sizeof(u32)) {
+		tnt_raise(IllegalParams, :"invalid field size");
+	}
+
+	if (p_val != NULL) {
+		*p_val = *(u64 *) data;
+	}
+
+	return (const char *) data + sizeof(u64);
+}
+
+void *
+save_field_str(void *buf, const void *data, u32 len)
+{
+	buf = save_varint32(buf, len);
+	memcpy(buf, data, len);
+	buf += len;
+
+	return buf;
+}
+
+void *
+save_field_u32(void *buf, u32 val)
+{
+	return save_field_str(buf, &val, sizeof(val));
+}
+
+void *
+save_field_u64(void *buf, u64 val)
+{
+	return save_field_str(buf, &val, sizeof(val));
+}
+

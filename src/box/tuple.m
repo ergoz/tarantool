@@ -55,6 +55,8 @@ tuple_alloc(size_t size)
 void
 tuple_free(struct tuple *tuple)
 {
+	if (tuple == NULL)
+		return;
 	say_debug("tuple_free(%p)", tuple);
 	assert(tuple->refs == 0);
 	sfree(tuple);

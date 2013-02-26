@@ -593,9 +593,10 @@ lbox_index_new(struct lua_State *L)
 {
 	int n = luaL_checkint(L, 1); /* get space id */
 	int idx = luaL_checkint(L, 2); /* get index id in */
+
 	/* locate the appropriate index */
-	struct space *sp = space_find(n);
-	Index *index = index_find(sp, idx);
+	struct space *sp = space_find_by_no(n);
+	Index *index = index_find_by_no(sp, idx);
 
 	/* create a userdata object */
 	void **ptr = lua_newuserdata(L, sizeof(void *));

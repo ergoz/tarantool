@@ -74,6 +74,12 @@ box_snap_row(const struct tbuf *t)
 	return (struct box_snap_row *)t->data;
 }
 
+struct box_recovery_state {
+	struct space *space;
+	Index *space_pk;
+	bool meta_finished;
+};
+
 void
 port_send_tuple(struct port *port, struct txn *txn, u32 flags)
 {
@@ -248,9 +254,78 @@ xlog_print(void *param __attribute__((unused)), struct tbuf *t)
 }
 
 static void
-recover_snap_row(struct tbuf *t)
+recover_snap_begin_build(void)
+{
+	struct space *sysspace = space_find_by_no(BOX_SYSSPACE_NO);
+
+	Index *sysspace_pk = index_find_by_no(sysspace, 0);
+	struct iterator *it = [sysspace_pk allocIterator];
+	@try {
+		[sysspace_pk initIterator: it :ITER_ALL :NULL :0];
+		struct tuple *tuple = NULL;
+		while ((tuple = it->next(it)) != NULL) {
+			const void *d = tuple->data;
+			u32 space_no;
+			load_field_u32(d, &space_no);
+			(void) space_find_by_no(space_no); /* just check */
+		}
+
+		[sysspace_pk initIterator: it :ITER_ALL :NULL :0];
+		while ((tuple = it->next(it)) != NULL) {
+			const void *d = tuple->data;
+			u32 space_no;
+			load_field_u32(d, &space_no);
+			struct space *space = space_find_by_no(space_no);
+
+			if (space_no == BOX_SYSSPACE_NO ||
+			    space_no == BOX_SYSINDEX_NO)
+				continue;
+
+			say_debug("Space %u: beginBuild", space_no);
+			Index *space_pk = index_find_by_no(space, 0);
+			[space_pk beginBuild];
+		}
+	} @finally {
+		it->free(it);
+	}
+}
+
+static void
+recover_snap_end_build(void)
+{
+	struct space *sysspace = space_find_by_no(BOX_SYSSPACE_NO);
+
+	Index *sysspace_pk = index_find_by_no(sysspace, 0);
+	struct iterator *it = [sysspace_pk allocIterator];
+	@try {
+		[sysspace_pk initIterator: it :ITER_ALL :NULL :0];
+
+		struct tuple *tuple = NULL;
+		while ((tuple = it->next(it)) != NULL) {
+			const void *d = tuple->data;
+			u32 space_no;
+			load_field_u32(d, &space_no);
+			struct space *space = space_find_by_no(space_no);
+
+			if (space_no == BOX_SYSSPACE_NO ||
+			    space_no == BOX_SYSINDEX_NO)
+				continue;
+
+			say_debug("Space %u: endBuild", space_no);
+			Index *space_pk = index_find_by_no(space, 0);
+			[space_pk endBuild];
+		}
+	} @finally {
+		it->free(it);
+	}
+}
+
+static void
+recover_snap_row(void *param, struct tbuf *t)
 {
 	assert(primary_indexes_enabled == false);
+
+	struct box_recovery_state *state = (struct box_recovery_state *) param;
 
 	struct box_snap_row *row = box_snap_row(t);
 
@@ -258,18 +333,48 @@ recover_snap_row(struct tbuf *t)
 	memcpy(tuple->data, row->data, row->data_size);
 	tuple->field_count = row->tuple_size;
 
-	struct space *space = space_find(row->space);
-	Index *index = space_index(space, 0);
-	/* Check to see if the tuple has a sufficient number of fields. */
-	if (unlikely(tuple->field_count < space->max_fieldno)) {
-		tnt_raise(IllegalParams, :"tuple must have all indexed fields");
+	if (state->space == NULL || state->space->no != row->space) {
+		/* Current space_no changed */
+		if (!state->meta_finished) {
+			if (row->space != BOX_SYSSPACE_NO &&
+			    row->space != BOX_SYSINDEX_NO) {
+				recover_snap_begin_build();
+				state->meta_finished = true;
+			}
+		} else {
+			assert(row->space != BOX_SYSSPACE_NO &&
+			       row->space != BOX_SYSINDEX_NO);
+		}
+
+		state->space = space_find_by_no(row->space);
+		state->space_pk = index_find_by_no(state->space, 0);
+		say_info("Space %u: building primary keys...", row->space);
 	}
-	[index buildNext: tuple];
+
+	assert (state->space != NULL && state->space_pk != NULL);
+	assert (state->space->no == row->space);
+
+	/* Check to see if the tuple has a sufficient number of fields. */
+	space_validate_tuple(state->space, tuple);
+
+	if (state->space->no != BOX_SYSSPACE_NO &&
+	    state->space->no != BOX_SYSINDEX_NO) {
+		[state->space_pk buildNext: tuple];
+	} else {
+		struct tuple *old;
+		old = [state->space_pk replace: NULL :tuple
+				:DUP_REPLACE_OR_INSERT];
+		if (old != NULL) {
+			/* an old entry from the configuration was replaced */
+			tuple_ref(old, -1);
+		}
+	}
+
 	tuple_ref(tuple, 1);
 }
 
 static int
-recover_row(void *param __attribute__((unused)), struct tbuf *t)
+recover_row(void *param, struct tbuf *t)
 {
 	/* drop wal header */
 	if (tbuf_peek(t, sizeof(struct header_v11)) == NULL) {
@@ -282,7 +387,7 @@ recover_row(void *param __attribute__((unused)), struct tbuf *t)
 		u16 tag = read_u16(t);
 		read_u64(t); /* drop cookie */
 		if (tag == SNAP) {
-			recover_snap_row(t);
+			recover_snap_row(param, t);
 		} else if (tag == XLOG) {
 			u16 op = read_u16(t);
 			process_rw(&port_null, op, t);
@@ -380,8 +485,7 @@ box_check_config(struct tarantool_cfg *conf)
 
 	/* check if at least one space is defined */
 	if (conf->space == NULL && conf->memcached_port == 0) {
-		out_warning(0, "at least one space or memcached port must be defined");
-		return -1;
+		return 0;
 	}
 
 	/* check configured spaces */
@@ -441,12 +545,13 @@ box_init(void)
 
 	/* initialization spaces */
 	space_init();
-	/* configure memcached space */
-	memcached_space_init();
+
+	struct box_recovery_state state;
+	memset(&state, 0, sizeof(state));
 
 	/* recovery initialization */
 	recovery_init(cfg.snap_dir, cfg.wal_dir,
-		      recover_row, NULL,
+		      recover_row, &state,
 		      cfg.rows_per_wal,
 		      init_storage ? RECOVER_READONLY : 0);
 	recovery_update_io_rate_limit(recovery_state, cfg.snap_io_rate_limit);
@@ -457,9 +562,14 @@ box_init(void)
 	if (init_storage)
 		return;
 
-	begin_build_primary_indexes();
 	recover_snap(recovery_state);
-	end_build_primary_indexes();
+	if (!state.meta_finished) {
+		recover_snap_begin_build();
+		state.meta_finished = true;
+	}
+	recover_snap_end_build();
+	primary_indexes_enabled = true;
+
 	recover_existing_wals(recovery_state);
 
 	stat_cleanup(stat_base, requests_MAX);
@@ -497,28 +607,78 @@ snapshot_write_tuple(struct log_io *l, struct fio_batch *batch,
 
 
 static void
-snapshot_space(struct space *sp, void *udata)
+snapshot_space(struct space *sp, struct log_io *l, struct fio_batch *batch)
 {
+	/* Do not save temporary spaces into snaphost */
+	if (sp->flags & SPACE_FLAG_TEMPORARY)
+		return;
+
 	struct tuple *tuple;
-	struct { struct log_io *l; struct fio_batch *batch; } *ud = udata;
-	Index *pk = space_index(sp, 0);
+	Index *pk = index_find_by_no(sp, 0);
 	struct iterator *it = pk->position;
 	[pk initIterator: it :ITER_ALL :NULL :0];
 
 	while ((tuple = it->next(it)))
-		snapshot_write_tuple(ud->l, ud->batch, space_n(sp), tuple);
+		snapshot_write_tuple(l, batch, space_n(sp), tuple);
 }
 
 void
 box_snapshot(struct log_io *l, struct fio_batch *batch)
 {
+	struct space *sysspace = space_find_by_no(BOX_SYSSPACE_NO);
+	struct space *sysindex = space_find_by_no(BOX_SYSINDEX_NO);
+
+	/*
+	 * Check that all spaces is valid.
+	 * Do not allow to save snaphost with broken metadata.
+	 */
+	Index *sysspace_pk = index_find_by_no(sysspace, 0);
+	struct iterator *it = [sysspace_pk allocIterator];
+	@try {
+		[sysspace_pk initIterator: it :ITER_ALL :NULL :0];
+
+		struct tuple *tuple = NULL;
+		while ((tuple = it->next(it)) != NULL) {
+			const void *d = tuple->data;
+			u32 space_no;
+			load_field_u32(d, &space_no);
+			space_find_by_no(space_no); /* just check */
+		}
+	} @finally {
+		it->free(it);
+	}
+
+	/* All spaces are valid */
+
+	/* Save sysspace and sysindex */
+	snapshot_space(sysspace, l, batch);
+	snapshot_space(sysindex, l, batch);
+
 	/* --init-storage switch */
 	if (primary_indexes_enabled == false)
 		return;
 
-	struct { struct log_io *l; struct fio_batch *batch; } ud = { l, batch };
+	/* Save other spaces */
+	it = [sysspace_pk allocIterator];
+	@try {
+		[sysspace_pk initIterator: it :ITER_ALL :NULL :0];
 
-	space_foreach(snapshot_space, &ud);
+		struct tuple *tuple = NULL;
+		while ((tuple = it->next(it)) != NULL) {
+			const void *d = tuple->data;
+			u32 space_no;
+			load_field_u32(d, &space_no);
+			if (space_no == BOX_SYSSPACE_NO ||
+			    space_no == BOX_SYSINDEX_NO) {
+				continue;
+			}
+
+			struct space *space = space_find_by_no(space_no);
+			snapshot_space(space, l, batch);
+		}
+	} @finally {
+		it->free(it);
+	}
 }
 
 void

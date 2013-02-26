@@ -47,6 +47,51 @@ txn_add_redo(struct txn *txn, u16 op, struct tbuf *data)
 			.pool = NULL };
 }
 
+static struct tuple *
+txn_replace_do_before_triggers(struct space *sp, struct tuple *old_tuple,
+			       struct tuple *new_tuple)
+{
+	@try {
+		struct space_trigger *trigger;
+		struct tuple *new_tuple2 = NULL;
+
+		if (old_tuple == NULL && new_tuple != NULL) {
+			old_tuple = [index_find_by_no(sp, 0) findByTuple:
+					new_tuple];
+		}
+
+		rlist_foreach_entry(trigger, &sp->before_triggers, link) {
+			assert (trigger->replace != NULL);
+
+			new_tuple2 = trigger->replace(trigger, sp, old_tuple,
+						      new_tuple);
+
+			if (new_tuple != NULL) {
+				if (new_tuple2 != NULL) {
+					tuple_ref(new_tuple2, 1);
+				} else if (old_tuple == NULL) {
+					return NULL;
+				}
+
+				tuple_ref(new_tuple, -1);
+				new_tuple = new_tuple2;
+
+				space_validate_tuple(sp, new_tuple);
+			} else {
+				assert (new_tuple2 == NULL);
+			}
+		}
+	} @catch(tnt_Exception *) {
+		if (new_tuple) {
+			tuple_ref(new_tuple, -1);
+		}
+
+		@throw;
+	}
+
+	return new_tuple;
+}
+
 void
 txn_replace(struct txn *txn, struct space *space,
 	    struct tuple *old_tuple, struct tuple *new_tuple,
@@ -55,16 +100,40 @@ txn_replace(struct txn *txn, struct space *space,
 	/* txn_add_undo() must be done after txn_add_redo() */
 	assert(txn->op != 0);
 	assert(old_tuple || new_tuple);
+
+	if (new_tuple != NULL) {
+		tuple_ref(new_tuple, 1);
+	}
+
+	if (!rlist_empty(&space->before_triggers)) {
+		struct tuple *new_tuple2 = txn_replace_do_before_triggers(
+				space, old_tuple, new_tuple);
+
+		if (new_tuple != new_tuple2) {
+			mode = DUP_INSERT;
+			new_tuple = new_tuple2;
+		}
+
+		if (old_tuple == NULL && new_tuple == NULL)
+			return;
+	}
+
 	/*
 	 * Remember the old tuple only if we replaced it
 	 * successfully, to not remove a tuple inserted by
 	 * another transaction in rollback().
 	 */
-	txn->old_tuple = space_replace(space, old_tuple, new_tuple, mode);
-	if (new_tuple) {
+	@try {
+		txn->old_tuple = space_replace(space, old_tuple, new_tuple,
+					       mode);
 		txn->new_tuple = new_tuple;
-		tuple_ref(txn->new_tuple, 1);
+	} @catch(tnt_Exception *) {
+		if (new_tuple) {
+			tuple_ref(new_tuple, -1);
+		}
+		@throw;
 	}
+
 	txn->space = space;
 }
 
@@ -79,6 +148,10 @@ void
 txn_commit(struct txn *txn)
 {
 	if (txn->old_tuple || txn->new_tuple) {
+		/* Do not save temporary spaces into WAL */
+		if (txn->space->flags & SPACE_FLAG_TEMPORARY)
+			return;
+
 		int64_t lsn = next_lsn(recovery_state);
 
 		ev_tstamp start = ev_now(), stop;
