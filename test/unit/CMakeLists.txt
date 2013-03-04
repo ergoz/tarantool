@@ -26,3 +26,6 @@ target_link_libraries(objc_catchcxx ${LIBOBJC_LIBRARIES} ${LUAJIT_LIB} -lm -pthr
 if (TARGET_OS_LINUX OR TARGET_OS_DEBIAN_FREEBSD)
     target_link_libraries(objc_catchcxx dl)
 endif()
+include_directories(${CMAKE_SOURCE_DIR}/src)
+add_executable(slab_cache slab_cache.c)
+target_link_libraries(slab_cache small)

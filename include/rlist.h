@@ -88,7 +88,7 @@ rlist_del(struct rlist *item)
 inline static struct rlist *
 rlist_shift(struct rlist *head)
 {
-	if (head->next == head->prev)
+	if (head->next == head->prev && head->next == head)
                 return 0;
         struct rlist *shift = head->next;
         head->next = shift->next;
