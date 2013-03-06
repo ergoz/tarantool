@@ -6,7 +6,7 @@
 #include <time.h>
 
 
-enum { NRUNS = 100, ITERATIONS = 10000, MAX_ALLOC = 105000 };
+enum { NRUNS = 100, ITERATIONS = 1000, MAX_ALLOC = SLAB_MAX_SIZE + 9999 };
 static struct slab *runs[NRUNS];
 
 int main()

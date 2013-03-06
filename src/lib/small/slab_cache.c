@@ -56,26 +56,12 @@ slab_order(size_t size)
 			  SLAB_MIN_SIZE_LB);
 }
 
-/** Align a size. Alignment must be a power of 2 */
-static inline size_t
-slab_align(size_t size, size_t alignment)
-{
-	return (size + alignment - 1) & ~(alignment - 1);
-}
-
 /** Convert slab order to the mmap()ed size. */
 static inline intptr_t
 slab_size(uint8_t order)
 {
 	assert(order <= SLAB_ORDER_LAST);
 	return 1 << (order + SLAB_MIN_SIZE_LB);
-}
-
-/* Aligned size of slab meta. */
-static inline size_t
-slab_sizeof()
-{
-	return slab_align(sizeof(struct slab), sizeof(intptr_t));
 }
 
 /**

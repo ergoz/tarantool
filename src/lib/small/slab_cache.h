@@ -115,4 +115,18 @@ slab_put(struct slab_cache *cache, struct slab *slab);
 struct slab *
 slab_from_ptr(void *ptr, uint8_t order);
 
+/** Align a size. Alignment must be a power of 2 */
+static inline size_t
+slab_align(size_t size, size_t alignment)
+{
+	return (size + alignment - 1) & ~(alignment - 1);
+}
+
+/* Aligned size of slab meta. */
+static inline size_t
+slab_sizeof()
+{
+	return slab_align(sizeof(struct slab), sizeof(intptr_t));
+}
+
 #endif /* INCLUDES_TARANTOOL_SLAB_CACHE_H */
