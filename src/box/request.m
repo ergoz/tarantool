@@ -88,17 +88,16 @@ execute_replace(struct request *request, struct txn *txn)
 	if (data->size == 0 || data->size != valid_tuple(data, field_count))
 		tnt_raise(IllegalParams, :"incorrect tuple length");
 
-	struct tuple *new_tuple = tuple_alloc(data->size);
-	new_tuple->field_count = field_count;
-	memcpy(new_tuple->data, data->data, data->size);
-
+	assert (sp->format != NULL);
+	struct tuple *new_tuple = tuple_read(sp->format, data->data,
+					     data->size);
 	@try {
 		space_validate_tuple(sp, new_tuple);
 		enum dup_replace_mode mode = dup_replace_mode(request->flags);
 		txn_replace(txn, sp, NULL, new_tuple, mode);
 
 	} @catch (tnt_Exception *e) {
-		tuple_free(new_tuple);
+		tuple_delete(new_tuple);
 		@throw;
 	}
 }
@@ -550,10 +549,14 @@ update_create_rope(struct update_op *op, struct update_op *op_end,
 
 	/* Initialize the rope with the old tuple. */
 
+	uint32_t tuple_bsize = tuple_write_size(tuple);
+	void *tuple_data = palloc(fiber->gc_pool, tuple_bsize);
+	tuple_write(tuple, tuple_data);
+
 	struct update_field *first = palloc(fiber->gc_pool,
 					    sizeof(struct update_field));
-	const void *field = tuple->data;
-	const void *end = tuple->data + tuple->bsize;
+	const void *field = tuple_data;
+	const void *end = tuple_data + tuple_bsize;
 	u32 field_len = load_varint32(&field);
 	update_field_init(first, field, field_len, end - field - field_len);
 
@@ -586,13 +589,18 @@ update_calc_new_tuple_length(struct rope *rope)
 	return new_tuple_len;
 }
 
-static void
-do_update_ops(struct rope *rope, struct tuple *new_tuple)
-{
-	void *new_data = new_tuple->data;
-	void *new_data_end = new_data + new_tuple->bsize;
 
-	new_tuple->field_count = 0;
+static struct tuple *
+do_update_ops(struct rope *rope, struct space *space)
+{
+	size_t new_tuple_len = update_calc_new_tuple_length(rope);
+	assert (new_tuple_len < UINT32_MAX);
+
+	void *data = palloc(fiber->gc_pool, new_tuple_len);
+	void *new_data = data;
+	void *new_data_end = new_data + new_tuple_len;
+
+	size_t field_count_total = 0;
 
 	struct rope_iter it;
 	struct rope_node *node;
@@ -652,8 +660,12 @@ do_update_ops(struct rope *rope, struct tuple *new_tuple)
 			memcpy(new_data, field->tail, field->tail_len);
 			new_data += field->tail_len;
 		}
-		new_tuple->field_count += field_count;
+
+		field_count_total += field_count;
 	}
+
+	assert (space->format != NULL);
+	return tuple_read(space->format, data, new_tuple_len);
 }
 
 static struct update_op *
@@ -713,17 +725,14 @@ execute_update(struct request *request, struct txn *txn)
 	struct update_op *ops = update_read_ops(data, op_cnt);
 	struct rope *rope = update_create_rope(ops, ops + op_cnt,
 					       old_tuple);
-	/* Allocate a new tuple. */
-	size_t new_tuple_len = update_calc_new_tuple_length(rope);
-	struct tuple *new_tuple = tuple_alloc(new_tuple_len);
 
+	/* Allocate a new tuple. */
+	struct tuple *new_tuple = do_update_ops(rope, sp);
 	@try {
-		do_update_ops(rope, new_tuple);
 		space_validate_tuple(sp, new_tuple);
 		txn_replace(txn, sp, old_tuple, new_tuple, DUP_INSERT);
-
 	} @catch (tnt_Exception *e) {
-		tuple_free(new_tuple);
+		tuple_delete(new_tuple);
 		@throw;
 	}
 }

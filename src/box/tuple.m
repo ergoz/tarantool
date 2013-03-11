@@ -29,36 +29,80 @@
 #include "tuple.h"
 
 #include <pickle.h>
-#include <salloc.h>
-#include "tbuf.h"
+#include <tbuf.h>
+#include <palloc.h>
+#include <exception.h>
 
-#include "exception.h"
+static struct tuple_format *tuple_formats[UINT16_MAX];
+static uint16_t tuple_format_id_last;
 
-/** Allocate a tuple */
-struct tuple *
-tuple_alloc(size_t size)
-{
-	size_t total = sizeof(struct tuple) + size;
-	struct tuple *tuple = salloc(total, "tuple");
-
-	tuple->flags = tuple->refs = 0;
-	tuple->bsize = size;
-
-	say_debug("tuple_alloc(%zu) = %p", size, tuple);
-	return tuple;
-}
-
-/**
- * Free the tuple.
- * @pre tuple->refs  == 0
- */
 void
-tuple_free(struct tuple *tuple)
+tuple_init(void)
 {
-	say_debug("tuple_free(%p)", tuple);
-	assert(tuple->refs == 0);
-	sfree(tuple);
+	tuple_format_id_last = 0;
+	memset(tuple_formats, 0, sizeof(tuple_formats));
 }
+
+void
+tuple_free(void)
+{
+	for (uint16_t format_id = 0; format_id < UINT16_MAX; format_id++) {
+		if (tuple_formats[format_id] == NULL)
+			continue;
+
+		tuple_formats[format_id]->delete_cb(tuple_formats[format_id]);
+		tuple_formats[format_id] = NULL;
+	}
+}
+
+void
+tuple_format_register(struct tuple_format *fmt)
+{
+	if (tuple_format_id_last >= UINT16_MAX) {
+		tnt_raise(LoggedError, :ER_MEMORY_ISSUE, sizeof(*fmt),
+			  "tuple_format", "register");
+	}
+
+	fmt->format_id = tuple_format_id_last++;
+	tuple_formats[fmt->format_id] = fmt;
+}
+
+const struct tuple_format *
+tuple_format(const struct tuple *tuple)
+{
+	if (tuple_formats[tuple->format_id] != NULL)
+		return tuple_formats[tuple->format_id];
+
+	return NULL;
+}
+
+extern inline void
+tuple_delete(struct tuple *tuple);
+
+extern inline struct tuple *
+tuple_read(const struct tuple_format *fmt, const void *buf, uint32_t size);
+
+extern inline uint32_t
+tuple_write_size(const struct tuple *tuple);
+
+extern inline void *
+tuple_write(const struct tuple *tuple, void *buf);
+
+extern inline uint32_t
+tuple_writev(const struct tuple *tuple, struct obuf *obuf);
+
+extern inline const void *
+tuple_field(const struct tuple *tuple, uint32_t field_no);
+
+extern inline struct tuple_iterator *
+tuple_iterator_new(const struct tuple *tuple, uint32_t field_no,
+		   void *(*realloc)(void *ptr, size_t size));
+
+extern inline void
+tuple_iterator_delete(struct tuple_iterator *it);
+
+extern inline const void *
+tuple_iterator_next(struct tuple_iterator *it);
 
 /**
  * Add count to tuple's reference counter.
@@ -73,34 +117,7 @@ tuple_ref(struct tuple *tuple, int count)
 	tuple->refs += count;
 
 	if (tuple->refs == 0)
-		tuple_free(tuple);
-}
-
-/** Get the next field from a tuple */
-static void *
-next_field(const void *f)
-{
-	u32 size = load_varint32(&f);
-	return (u8 *)f + size;
-}
-
-/**
- * Get a field from tuple.
- *
- * @returns field data if field exists or NULL
- */
-void *
-tuple_field(struct tuple *tuple, u32 i)
-{
-	void *field = tuple->data;
-
-	if (i >= tuple->field_count)
-		return NULL;
-
-	while (i-- > 0)
-		field = next_field(field);
-
-	return field;
+		tuple_delete(tuple);
 }
 
 /** print field to tbuf */
@@ -136,7 +153,34 @@ print_field(struct tbuf *buf, const void *f)
  * key: { value, value, value }
  */
 void
-tuple_print(struct tbuf *buf, u32 field_count, void *f)
+tuple_print(struct tbuf *buf, const struct tuple *tuple)
+{
+	if (tuple->field_count == 0) {
+		tbuf_printf(buf, "'': {}");
+		return;
+	}
+
+	struct tuple_iterator *it = tuple_iterator_new(tuple, 0, prealloc);
+	const void *f = tuple_iterator_next(it);
+	print_field(buf, f);
+	tbuf_printf(buf, ": {");
+
+	for (u32 i = 1; i < tuple->field_count; i++) {
+		f = tuple_iterator_next(it);
+		print_field(buf, f);
+		if (likely(i + 1 < tuple->field_count))
+		tbuf_printf(buf, ", ");
+	}
+
+	tbuf_printf(buf, "}");
+}
+
+/**
+ * Print a tuple in yaml-compatible mode to tbuf:
+ * key: { value, value, value }
+ */
+void
+tuple_print_fields(struct tbuf *buf, u32 field_count, const void *f)
 {
 	if (field_count == 0) {
 		tbuf_printf(buf, "'': {}");
@@ -145,12 +189,16 @@ tuple_print(struct tbuf *buf, u32 field_count, void *f)
 
 	print_field(buf, f);
 	tbuf_printf(buf, ": {");
-	f = next_field(f);
+	u32 field_size = load_varint32(&f);
+	f = (u8 *)f + field_size;
 
-	for (u32 i = 1; i < field_count; i++, f = next_field(f)) {
+	for (u32 i = 1; i < field_count; i++) {
 		print_field(buf, f);
 		if (likely(i + 1 < field_count))
 			tbuf_printf(buf, ", ");
+
+		field_size = load_varint32(&f);
+		f = (u8 *)f + field_size;
 	}
 	tbuf_printf(buf, "}");
 }

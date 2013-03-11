@@ -37,6 +37,7 @@
 #include <pickle.h>
 #include <say.h>
 #include <stat.h>
+#include <fiber.h>
 #include <tarantool.h>
 
 #include <cfg/tarantool_box_cfg.h>
@@ -159,7 +160,7 @@ box_xlog_sprint(struct tbuf *buf, const struct tbuf *t)
 				  tbuf_str(buf));
 			abort();
 		}
-		tuple_print(buf, field_count, b->data);
+		tuple_print_fields(buf, field_count, b->data);
 		break;
 
 	case DELETE:
@@ -171,7 +172,7 @@ box_xlog_sprint(struct tbuf *buf, const struct tbuf *t)
 			say_error("found a corrupt tuple %s", tbuf_str(buf));
 			abort();
 		}
-		tuple_print(buf, key_len, key);
+		tuple_print_fields(buf, key_len, key);
 		break;
 
 	case UPDATE:
@@ -181,7 +182,7 @@ box_xlog_sprint(struct tbuf *buf, const struct tbuf *t)
 		op_cnt = read_u32(b);
 
 		tbuf_printf(buf, "flags:%08X ", flags);
-		tuple_print(buf, key_len, key);
+		tuple_print_fields(buf, key_len, key);
 
 		while (op_cnt-- > 0) {
 			field_no = read_u32(b);
@@ -206,7 +207,7 @@ box_xlog_sprint(struct tbuf *buf, const struct tbuf *t)
 				tbuf_printf(buf, "or ");
 				break;
 			}
-			tuple_print(buf, 1, arg);
+			tuple_print_fields(buf, 1, arg);
 			tbuf_printf(buf, "] ");
 		}
 		break;
@@ -230,7 +231,7 @@ snap_print(void *param __attribute__((unused)), struct tbuf *t)
 
 		struct box_snap_row *row =  box_snap_row(b);
 
-		tuple_print(out, row->tuple_size, row->data);
+		tuple_print_fields(out, row->tuple_size, row->data);
 		printf("n:%i %*s\n", row->space, (int) out->size,
 		       (char *)out->data);
 	} @catch (id e) {
@@ -259,11 +260,10 @@ recover_snap_row(struct tbuf *t)
 
 	struct box_snap_row *row = box_snap_row(t);
 
-	struct tuple *tuple = tuple_alloc(row->data_size);
-	memcpy(tuple->data, row->data, row->data_size);
-	tuple->field_count = row->tuple_size;
-
 	struct space *space = space_find(row->space);
+
+	struct tuple *tuple = tuple_read(space->format, row->data,
+					 row->data_size);
 	Index *index = space_index(space, 0);
 	/* Check to see if the tuple has a sufficient number of fields. */
 	if (unlikely(tuple->field_count < space->max_fieldno)) {
@@ -436,14 +436,16 @@ void
 box_free(void)
 {
 	space_free();
+	tuple_free();
 }
 
 void
 box_init(void)
 {
 	title("loading");
-	atexit(box_free);
 
+	/* initialize tuple library*/
+	tuple_init();
 	/* initialization spaces */
 	space_init();
 	/* configure memcached space */
@@ -494,12 +496,14 @@ snapshot_write_tuple(struct log_io *l, struct fio_batch *batch,
 	struct box_snap_row header;
 	header.space = n;
 	header.tuple_size = tuple->field_count;
-	header.data_size = tuple->bsize;
+	header.data_size = tuple_write_size(tuple);
+
+	void *buf = palloc(fiber->gc_pool, header.data_size);
+	tuple_write(tuple, buf);
 
 	snapshot_write_row(l, batch, (void *) &header, sizeof(header),
-			   tuple->data, tuple->bsize);
+			   buf, header.data_size);
 }
-
 
 static void
 snapshot_space(struct space *sp, void *udata)

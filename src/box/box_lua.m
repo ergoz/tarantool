@@ -29,6 +29,7 @@
 #include "box_lua.h"
 #include "lua/init.h"
 #include <fiber.h>
+#include <palloc.h>
 #include "box/box.h"
 #include "request.h"
 #include "txn.h"
@@ -43,6 +44,7 @@
 
 #include "pickle.h"
 #include "tuple.h"
+#include "tuple_mem.h"
 #include "space.h"
 #include "port.h"
 
@@ -55,6 +57,8 @@ extern const char box_lua[];
  * procedures running at the same time.
  */
 static lua_State *root_L;
+
+static struct tuple_format *tuple_temp_fmt = NULL;
 
 /*
  * Functions, exported in box_lua.h should have prefix
@@ -159,23 +163,22 @@ lbox_tuple_slice(struct lua_State *L)
 	if (end <= start)
 		luaL_error(L, "tuple.slice(): start must be less than end");
 
-	u8 *field = tuple->data;
 	u32 fieldno = 0;
 	u32 stop = end - 1;
 
-	while (field < tuple->data + tuple->bsize) {
+	struct tuple_iterator *it = tuple_iterator_new(tuple, 0, prealloc);
+	const void *field;
+	while ((field = tuple_iterator_next(it)) != NULL) {
 		size_t len = load_varint32((const void **) &field);
 		if (fieldno >= start) {
 			lua_pushlstring(L, (char *) field, len);
 			if (fieldno == stop)
 				break;
 		}
-		field += len;
 		fieldno += 1;
 	}
 	return end - start;
 }
-
 
 /**
  * Given a tuple, range of fields to remove (start and end field
@@ -191,30 +194,37 @@ lbox_tuple_slice(struct lua_State *L)
  *
  * @return size of the new tuple
 */
-static size_t
-transform_calculate(struct lua_State *L, struct tuple *tuple,
-		    int start, int argc, int offset, int len,
-		    size_t lr[2])
+static uint32_t
+transform_calculate(struct lua_State *L, const struct tuple *tuple,
+		    int start, int argc, int offset, int len)
 {
 	/* calculate size of the new tuple */
-	const void *tuple_end = tuple->data + tuple->bsize;
-	const void *tuple_field = tuple->data;
+	uint32_t bsize_new = 0;
 
-	lr[0] = tuple_range_size(&tuple_field, tuple_end, offset);
+	struct tuple_iterator *it = tuple_iterator_new(tuple, 0, prealloc);
+	const void *field;
+	uint32_t field_no = 0;
+	while ((field = tuple_iterator_next(it)) != NULL) {
+		if (field_no < offset || field_no >= offset + len) {
+			uint32_t field_size = load_varint32(&field);
+			bsize_new += field_size;
+			bsize_new += varint32_sizeof(field_size);
+		}
+		field_no++;
+	}
 
 	/* calculate sizes of supplied fields */
-	size_t mid = 0;
 	for (int i = start ; i <= argc ; i++) {
 		switch (lua_type(L, i)) {
 		case LUA_TNUMBER:
-			mid += varint32_sizeof(sizeof(u32)) + sizeof(u32);
+			bsize_new += varint32_sizeof(sizeof(u32)) + sizeof(u32);
 			break;
 		case LUA_TCDATA:
-			mid += varint32_sizeof(sizeof(u64)) + sizeof(u64);
+			bsize_new += varint32_sizeof(sizeof(u64)) + sizeof(u64);
 			break;
 		case LUA_TSTRING: {
 			size_t field_size = lua_objlen(L, i);
-			mid += varint32_sizeof(field_size) + field_size;
+			bsize_new += varint32_sizeof(field_size) + field_size;
 			break;
 		}
 		default:
@@ -224,13 +234,7 @@ transform_calculate(struct lua_State *L, struct tuple *tuple,
 		}
 	}
 
-	/* calculate size of the removed fields */
-	tuple_range_size(&tuple_field, tuple_end, len);
-
-	/* calculate last part of the tuple fields */
-	lr[1] = tuple_end - tuple_field;
-
-	return lr[0] + mid + lr[1];
+	return bsize_new;
 }
 
 static inline void
@@ -274,17 +278,35 @@ lbox_tuple_transform(struct lua_State *L)
 	if (len > tuple->field_count - offset)
 		len = tuple->field_count - offset;
 
+	size_t allocated_size = palloc_allocated(fiber->gc_pool);
+
 	/* calculate size of the new tuple */
-	size_t lr[2]; /* left and right part sizes */
-	size_t size = transform_calculate(L, tuple, 4, argc, offset, len, lr);
+	uint32_t bsize_new = transform_calculate(L, tuple, 4, argc, offset,len);
 
-	/* allocate new tuple */
-	struct tuple *dest = tuple_alloc(size);
-	dest->field_count = (tuple->field_count - len) + (argc - 3);
+	/* allocate a buffer for new tuple data */
+	void *data_new = palloc(fiber->gc_pool, bsize_new);
 
-	/* construct tuple */
-	memcpy(dest->data, tuple->data, lr[0]);
-	u8 *ptr = dest->data + lr[0];
+	/* copy the start part */
+	uint8_t *ptr = (uint8_t *) data_new;
+	struct tuple_iterator *it = tuple_iterator_new(tuple, 0, prealloc);
+	uint32_t field_no_old = 0;
+	for (; field_no_old < offset; field_no_old++) {
+		const void *field = tuple_iterator_next(it);
+		assert (field != NULL);
+		uint32_t field_size = load_varint32(&field);
+		ptr = save_varint32(ptr, field_size);
+		memcpy(ptr, field, field_size);
+		ptr += field_size;
+	}
+
+	/* skip the old middle part */
+	for (; field_no_old < offset + len; field_no_old++) {
+		const void *field = tuple_iterator_next(it);
+		assert (field != NULL);
+		(void) field;
+	}
+
+	/* insert the new part */
 	for (int i = 4; i <= argc; i++) {
 		switch (lua_type(L, i)) {
 		case LUA_TNUMBER: {
@@ -306,10 +328,26 @@ lbox_tuple_transform(struct lua_State *L)
 		default:
 			/* default type check is done in transform_calculate()
 			 * function */
+			assert (false);
 			break;
 		}
 	}
-	memcpy(ptr, tuple_field(tuple, offset + len), lr[1]);
+
+	/* copy the last part */
+	for (; field_no_old < tuple->field_count; field_no_old++) {
+		const void *field = tuple_iterator_next(it);
+		assert (field != NULL);
+		uint32_t field_size = load_varint32(&field);
+		ptr = save_varint32(ptr, field_size);
+		memcpy(ptr, field, field_size);
+		ptr += field_size;
+	}
+	tuple_iterator_delete(it);
+
+	assert (ptr == (uint8_t *) data_new + bsize_new);
+
+	struct tuple *dest = tuple_read(tuple_temp_fmt, data_new, bsize_new);
+	ptruncate(fiber->gc_pool, allocated_size);
 
 	lbox_pushtuple(L, dest);
 	return 1;
@@ -333,17 +371,19 @@ tuple_find(struct lua_State *L, struct tuple *tuple, size_t offset,
 	int idx = offset;
 	if (idx >= tuple->field_count)
 		return 0;
-	u8 *field = tuple_field(tuple, idx);
-	while (field < tuple->data + tuple->bsize) {
-		size_t len = load_varint32((const void **) &field);
+
+	struct tuple_iterator *it = tuple_iterator_new(tuple, idx, prealloc);
+	const void *field;
+	while ((field = tuple_iterator_next(it)) != NULL) {
+		size_t len = load_varint32(&field);
 		if (len == key_size && (memcmp(field, key, len) == 0)) {
 			lua_pushinteger(L, idx);
 			if (!all)
 				break;
 		}
-		field += len;
 		idx++;
 	}
+
 	return lua_gettop(L) - top;
 }
 
@@ -401,12 +441,12 @@ static int
 lbox_tuple_unpack(struct lua_State *L)
 {
 	struct tuple *tuple = lua_checktuple(L, 1);
-	const u8 *field = tuple->data;
 
-	while (field < tuple->data + tuple->bsize) {
-		size_t len = load_varint32((const void **) &field);
-		lua_pushlstring(L, (char *) field, len);
-		field += len;
+	struct tuple_iterator *it = tuple_iterator_new(tuple, 0, prealloc);
+	const void *field;
+	while ((field = tuple_iterator_next(it)) != NULL) {
+		size_t len = load_varint32(&field);
+		lua_pushlstring(L, (const char *) field, len);
 	}
 	assert(lua_gettop(L) == tuple->field_count + 1);
 	return tuple->field_count;
@@ -418,13 +458,13 @@ lbox_tuple_totable(struct lua_State *L)
 	struct tuple *tuple = lua_checktuple(L, 1);
 	lua_newtable(L);
 	int index = 1;
-	const u8 *field = tuple->data;
-	while (field < tuple->data + tuple->bsize) {
-		size_t len = load_varint32((const void **) &field);
+	struct tuple_iterator *it = tuple_iterator_new(tuple, 0, prealloc);
+	const void *field;
+	while ((field = tuple_iterator_next(it)) != NULL) {
+		size_t len = load_varint32(&field);
 		lua_pushnumber(L, index++);
-		lua_pushlstring(L, (char *) field, len);
+		lua_pushlstring(L, (const char *) field, len);
 		lua_rawset(L, -3);
-		field += len;
 	}
 	return 1;
 }
@@ -464,7 +504,7 @@ lbox_tuple_tostring(struct lua_State *L)
 	struct tuple *tuple = lua_checktuple(L, 1);
 	/* @todo: print the tuple */
 	struct tbuf *tbuf = tbuf_new(fiber->gc_pool);
-	tuple_print(tbuf, tuple->field_count, tuple->data);
+	tuple_print(tbuf, tuple);
 	lua_pushlstring(L, tbuf->data, tbuf->size);
 	return 1;
 }
@@ -491,28 +531,28 @@ lbox_pushtuple(struct lua_State *L, struct tuple *tuple)
 static int
 lbox_tuple_next(struct lua_State *L)
 {
+	/* TODO(roman): rewrite using tuple_iterator */
 	struct tuple *tuple = lua_checktuple(L, 1);
 	int argc = lua_gettop(L) - 1;
-	u8 *field = NULL;
-	size_t len;
 
+	u32 field_no;
 	if (argc == 0 || (argc == 1 && lua_type(L, 2) == LUA_TNIL))
-		field = tuple->data;
-	else if (argc == 1 && lua_islightuserdata(L, 2))
-		field = lua_touserdata(L, 2);
+		field_no = 0;
+	else if (argc == 1 && lua_type(L, 2) == LUA_TNUMBER)
+		field_no = lua_tointeger(L, 2);
 	else
 		luaL_error(L, "tuple.next(): bad arguments");
 
-	(void)field;
-	assert(field >= tuple->data);
-	if (field < tuple->data + tuple->bsize) {
-		len = load_varint32((const void **) &field);
-		lua_pushlightuserdata(L, field + len);
-		lua_pushlstring(L, (char *) field, len);
-		return 2;
+	if (field_no >= tuple->field_count) {
+		lua_pushnil(L);
+		return 1;
 	}
-	lua_pushnil(L);
-	return  1;
+
+	const void *field = tuple_field(tuple, field_no);
+	uint32_t len = load_varint32(&field);
+	lua_pushinteger(L, field_no + 1);
+	lua_pushlstring(L, (const char *) field, len);
+	return 2;
 }
 
 /** Iterator over tuple fields. Adapt lbox_tuple_next
@@ -566,8 +606,8 @@ lbox_checkiterator(struct lua_State *L, int i)
 
 static void
 lbox_pushiterator(struct lua_State *L, Index *index,
-                  struct iterator *it, enum iterator_type type,
-                  void *key, size_t size, int part_count)
+		  struct iterator *it, enum iterator_type type,
+		  const void *key, size_t size, uint32_t part_count)
 {
 	struct {
 		struct iterator *it;
@@ -770,8 +810,9 @@ lbox_create_iterator(struct lua_State *L)
 			/* Tuple. */
 			struct tuple *tuple = lua_checktuple(L, 2);
 			field_count = tuple->field_count;
-			key = tuple->data;
-			key_size = tuple->bsize;
+			key_size = tuple_write_size(tuple);
+			key = palloc(fiber->gc_pool, key_size);
+			tuple_write(tuple, key);
 		} else {
 			/* Single or multi- part key. */
 			field_count = argc - 2;
@@ -798,7 +839,7 @@ lbox_create_iterator(struct lua_State *L)
 	}
 	struct iterator *it = [index allocIterator];
 	lbox_pushiterator(L, index, it, type, key, key_size,
-	                  field_count);
+			  field_count);
 
 	/* truncate memory used by key construction */
 	ptruncate(fiber->gc_pool, allocated_size);
@@ -887,7 +928,9 @@ lbox_index_count(struct lua_State *L)
 	if (argc == 1 && lua_type(L, 2) == LUA_TUSERDATA) {
 		/* Searching by tuple. */
 		struct tuple *tuple = lua_checktuple(L, 2);
-		key = tuple->data;
+		uint32_t bsize = tuple_write_size(tuple);
+		key = palloc(fiber->gc_pool, bsize);
+		tuple_write(tuple, key);
 		key_part_count = tuple->field_count;
 	} else {
 		/* Single or multi- part key. */
@@ -1034,16 +1077,11 @@ lua_table_to_tuple(struct lua_State *L, int index)
 		tuple_len += field_len + varint32_sizeof(field_len);
 		lua_pop(L, 1);
 	}
-	struct tuple *tuple = tuple_alloc(tuple_len);
-	/*
-	 * Important: from here and on if there is an exception,
-	 * the tuple is leaked.
-	 */
-	tuple->field_count = field_count;
-	u8 *pos = tuple->data;
+
+	void *tuple_data = palloc(fiber->gc_pool, tuple_len);
+	u8 *pos = tuple_data;
 
 	/* Second go: store data in the tuple. */
-
 	lua_pushnil(L);  /* first key */
 	while (lua_next(L, index) != 0) {
 		switch (lua_type(L, -1)) {
@@ -1080,7 +1118,8 @@ lua_table_to_tuple(struct lua_State *L, int index)
 		}
 		lua_pop(L, 1);
 	}
-	return tuple;
+
+	return tuple_read(tuple_temp_fmt, tuple_data,tuple_len);
 }
 
 static struct tuple*
@@ -1098,27 +1137,30 @@ lua_totuple(struct lua_State *L, int index)
 	{
 		size_t len = sizeof(u32);
 		u32 num = lua_tointeger(L, index);
-		tuple = tuple_alloc(len + varint32_sizeof(len));
-		tuple->field_count = 1;
-		memcpy(save_varint32(tuple->data, len), &num, len);
+		uint32_t tuple_bsize = len + varint32_sizeof(len);
+		void *tuple_data = palloc(fiber->gc_pool, tuple_bsize);
+		memcpy(save_varint32(tuple_data, len), &num, len);
+		tuple = tuple_read(tuple_temp_fmt, tuple_data, tuple_bsize);
 		break;
 	}
 	case LUA_TCDATA:
 	{
 		u64 num = tarantool_lua_tointeger64(L, index);
 		size_t len = sizeof(u64);
-		tuple = tuple_alloc(len + varint32_sizeof(len));
-		tuple->field_count = 1;
-		memcpy(save_varint32(tuple->data, len), &num, len);
+		uint32_t tuple_bsize = len + varint32_sizeof(len);
+		void *tuple_data = palloc(fiber->gc_pool, tuple_bsize);
+		memcpy(save_varint32(tuple_data, len), &num, len);
+		tuple = tuple_read(tuple_temp_fmt, tuple_data, tuple_bsize);
 		break;
 	}
 	case LUA_TSTRING:
 	{
 		size_t len;
 		const char *str = lua_tolstring(L, index, &len);
-		tuple = tuple_alloc(len + varint32_sizeof(len));
-		tuple->field_count = 1;
-		memcpy(save_varint32(tuple->data, len), str, len);
+		uint32_t tuple_bsize = len + varint32_sizeof(len);
+		void *tuple_data = palloc(fiber->gc_pool, tuple_bsize);
+		memcpy(save_varint32(tuple_data, len), str, len);
+		tuple = tuple_read(tuple_temp_fmt, tuple_data, tuple_bsize);
 		break;
 	}
 	case LUA_TNIL:
@@ -1126,9 +1168,10 @@ lua_totuple(struct lua_State *L, int index)
 	{
 		const char *str = tarantool_lua_tostring(L, index);
 		size_t len = strlen(str);
-		tuple = tuple_alloc(len + varint32_sizeof(len));
-		tuple->field_count = 1;
-		memcpy(save_varint32(tuple->data, len), str, len);
+		uint32_t tuple_bsize = len + varint32_sizeof(len);
+		void *tuple_data = palloc(fiber->gc_pool, tuple_bsize);
+		memcpy(save_varint32(tuple_data, len), str, len);
+		tuple = tuple_read(tuple_temp_fmt, tuple_data, tuple_bsize);
 		break;
 	}
 	case LUA_TUSERDATA:
@@ -1155,7 +1198,7 @@ port_add_lua_ret(struct port *port, struct lua_State *L, int index)
 		port_add_tuple(port, tuple, BOX_RETURN_TUPLE);
 	} @finally {
 		if (tuple->refs == 0)
-			tuple_free(tuple);
+			tuple_delete(tuple);
 	}
 }
 
@@ -1439,7 +1482,12 @@ luaL_packvalue(struct lua_State *L, luaL_Buffer *b, int index)
 		struct tuple *tu = lua_istuple(L, index);
 		if (tu == NULL)
 			luaL_error(L, "box.pack: unsupported type");
-		luaL_addlstring(b, (char*)tu->data, tu->bsize);
+		size_t allocated_size = palloc_allocated(fiber->gc_pool);
+		uint32_t tuple_bsize = tuple_write_size(tu);
+		char *tuple_data = (char *) palloc(fiber->gc_pool, tuple_bsize);
+		tuple_write(tu, tuple_data);
+		luaL_addlstring(b, tuple_data, tuple_bsize);
+		ptruncate(fiber->gc_pool, allocated_size);
 		return;
 	}
 	case LUA_TTABLE:
@@ -1736,7 +1784,7 @@ static const struct luaL_reg boxlib[] = {
 };
 
 void
-mod_lua_init(struct lua_State *L)
+box_lua_init(struct lua_State *L)
 {
 	/* box, box.tuple */
 	tarantool_lua_register_type(L, tuplelib_name, lbox_tuple_meta);
@@ -1757,4 +1805,8 @@ mod_lua_init(struct lua_State *L)
 	assert(lua_gettop(L) == 0);
 
 	root_L = L;
+
+	/* Register a tuple format for tuples that can be created by Lua */
+	tuple_temp_fmt = tuple_format_mem_new(0, NULL);
+	tuple_format_register(tuple_temp_fmt);
 }

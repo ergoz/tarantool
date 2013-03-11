@@ -573,13 +573,6 @@ error:
 void
 tarantool_free(void)
 {
-	/*
-	 * Got to be done prior to anything else, since GC
-	 * handlers can refer to other subsystems (e.g. fibers).
-	 */
-	if (tarantool_L)
-		tarantool_lua_close(tarantool_L);
-
 	recovery_free();
 	stat_free();
 
@@ -619,6 +612,21 @@ static void
 initialize_minimal()
 {
 	initialize(0.1, 4, 2);
+}
+
+static void
+lua_init(void)
+{
+	tarantool_L = tarantool_lua_init();
+}
+
+static void
+lua_free(void)
+{
+	if (tarantool_L == NULL)
+		return;
+
+	tarantool_lua_close(tarantool_L);
 }
 
 int
@@ -828,6 +836,7 @@ main(int argc, char **argv)
 		init_storage = true;
 		initialize_minimal();
 		box_init();
+		atexit(box_free);
 		set_lsn(recovery_state, 1);
 		snapshot_save(recovery_state, box_snapshot);
 		exit(EXIT_SUCCESS);
@@ -868,8 +877,10 @@ main(int argc, char **argv)
 
 
 	@try {
-		tarantool_L = tarantool_lua_init();
 		box_init();
+		atexit(box_free);
+		lua_init();
+		atexit(lua_free);
 		memcached_init(cfg.bind_ipaddr, cfg.memcached_port);
 		tarantool_lua_load_cfg(tarantool_L, &cfg);
 		/*

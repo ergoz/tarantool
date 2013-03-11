@@ -159,9 +159,9 @@ enum dup_replace_mode {
 };
 
 @interface Index: tnt_Object {
+ @public
 	/* Index features. */
 	struct index_traits *traits;
- @public
 	/* Index owner space */
 	struct space *space;
 	/* Description of a possibly multipart key. */
@@ -222,13 +222,32 @@ enum dup_replace_mode {
 		     :(const void *) key :(u32) part_count;
 @end
 
-void
-check_key_parts(const struct key_def *key_def, u32 part_count,
-		bool partial_key_allowed);
-
 uint32_t
 replace_check_dup(struct tuple *old_tuple,
 		  struct tuple *dup_tuple,
 		  enum dup_replace_mode mode);
+
+void
+index_validate_key(Index *self, enum iterator_type type, const void *key,
+		   u32 part_count);
+
+uint32_t
+tuple_write_key_size(const struct tuple *tuple, const struct key_def *key_def);
+
+void *
+tuple_write_key(const struct tuple *tuple, const struct key_def *key_def,
+		void *buf);
+
+int
+tuple_compare(const struct tuple *tuple_a, const struct tuple *tuple_b,
+	      const struct key_def *key_def);
+
+int
+tuple_compare_dup(const struct tuple *tuple_a, const struct tuple *tuple_b,
+		  const struct key_def *key_def);
+
+int
+tuple_compare_with_key(const struct tuple *tuple_a, const void *key,
+		       uint32_t part_count, const struct key_def *key_def);
 
 #endif /* TARANTOOL_BOX_INDEX_H_INCLUDED */

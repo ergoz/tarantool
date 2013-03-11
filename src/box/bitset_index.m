@@ -42,6 +42,7 @@ static struct index_traits bitset_index_traits = {
 	.allows_partial_key = false,
 };
 
+/* TODO: move these methods to tuple format */
 static inline size_t
 tuple_to_value(struct tuple *tuple)
 {
@@ -244,9 +245,9 @@ bitset_index_iterator_next(struct iterator *iterator)
 	const void *bitset_key = NULL;
 	size_t bitset_key_size = 0;
 
+	index_validate_key(self, type, key, part_count);
+
 	if (type != ITER_ALL) {
-		check_key_parts(key_def, part_count,
-				bitset_index_traits.allows_partial_key);
 		const void *key2 = key;
 		bitset_key_size = (size_t) load_varint32(&key2);
 		bitset_key = key2;

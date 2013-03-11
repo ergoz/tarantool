@@ -40,6 +40,7 @@
 #include <stdlib.h>
 #include <third_party/queue.h>
 #include <tbuf.h>
+#include <fiber.h>
 #include "exception.h"
 
 struct chunk {
@@ -486,4 +487,17 @@ size_t
 palloc_allocated(struct palloc_pool *pool)
 {
 	return pool->allocated;
+}
+
+void *
+prealloc(void *ptr, size_t size)
+{
+	if (ptr == NULL && size > 0) {
+		return palloc(fiber->gc_pool, size);
+	} else if (ptr != NULL && size == 0) {
+		return NULL;
+	} else {
+		tnt_raise(ClientError, :ER_UNSUPPORTED,
+			  "prealloc", "unsupported mode of operation");
+	}
 }

@@ -36,6 +36,7 @@
 #include "box/space.h"
 #include "box/port.h"
 #include "box/tuple.h"
+#include "box/tuple_mem.h"
 #include "fiber.h"
 #include "cfg/warning.h"
 #include  TARANTOOL_CONFIG
@@ -46,8 +47,8 @@
 #include "coio_buf.h"
 
 #define STAT(_)					\
-        _(MEMC_GET, 1)				\
-        _(MEMC_GET_MISS, 2)			\
+	_(MEMC_GET, 1)				\
+	_(MEMC_GET_MISS, 2)			\
 	_(MEMC_GET_HIT, 3)			\
 	_(MEMC_EXPIRED_KEYS, 4)
 
@@ -144,8 +145,14 @@ find(const void *key)
 static struct meta *
 meta(struct tuple *tuple)
 {
-	void *field = tuple_field(tuple, 1);
-	return field + 1;
+	const void *field = tuple_field(tuple, 1);
+
+	u32 field_size = load_varint32(&field);
+	assert (varint32_sizeof(field_size) == 1);
+	(void) field_size;
+
+	/* TODO: tuples are immutable! */
+	return (struct meta *) field;
 }
 
 static bool
@@ -239,7 +246,6 @@ void memcached_get(struct obuf *out, size_t keys_count, struct tbuf *keys,
 		u32 key_len;
 		u32 value_len;
 		u32 suffix_len;
-		u32 _l;
 
 		const void *key = read_field(keys);
 		tuple = find(key);
@@ -251,23 +257,22 @@ void memcached_get(struct obuf *out, size_t keys_count, struct tbuf *keys,
 			continue;
 		}
 
-		field = tuple->data;
-
+		struct tuple_iterator *it =
+				tuple_iterator_new(tuple, 1, prealloc);
 		/* skip key */
-		_l = load_varint32(&field);
-		field += _l;
 
 		/* metainfo */
-		_l = load_varint32(&field);
+		field = tuple_iterator_next(it);
+		load_varint32(&field);
 		m = field;
-		field += _l;
 
 		/* suffix */
+		field = tuple_iterator_next(it);
 		suffix_len = load_varint32(&field);
 		suffix = field;
-		field += suffix_len;
 
 		/* value */
+		field = tuple_iterator_next(it);
 		value_len = load_varint32(&field);
 		value = field;
 
@@ -461,8 +466,8 @@ memcached_init(const char *bind_ipaddr, int memcached_port)
 void
 memcached_space_init()
 {
-        if (cfg.memcached_port == 0)
-                return;
+	if (cfg.memcached_port == 0)
+		return;
 
 
 	/* Configure memcached index key. */
@@ -487,6 +492,16 @@ memcached_space_init()
 	struct space *memc_s =
 		space_create(cfg.memcached_space, key_def, 1, 4);
 
+	memc_s->max_fieldno = 4;
+	memc_s->field_types = malloc(memc_s->max_fieldno *
+				     sizeof(*memc_s->field_types));
+	memc_s->field_types[0] = STRING;
+	memc_s->field_types[1] = STRING;
+	memc_s->field_types[2] = STRING;
+	memc_s->field_types[3] = STRING;
+
+	memc_s->format = tuple_format_mem_new(2, (uint32_t[]) {0, 1});
+	tuple_format_register(memc_s->format);
 	Index *memc_index = [Index alloc: HASH :key_def :memc_s];
 	space_set_index(memc_s, 0, memc_index);
 
@@ -548,7 +563,8 @@ restart:
 				continue;
 
 			say_debug("expire tuple %p", tuple);
-			tbuf_append_field(keys_to_delete, tuple->data);
+			const void *field = tuple_field(tuple, 0);
+			tbuf_append_field(keys_to_delete, field);
 		}
 		memcached_delete_expired_keys(keys_to_delete);
 		fiber_gc();

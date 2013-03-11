@@ -46,16 +46,6 @@ typedef int (*tree_cmp_t)(const void *, const void *, void *);
 };
 
 + (struct index_traits *) traits;
-+ (Index *) alloc: (struct key_def *) key_def :(struct space *) space;
-
-/** To be defined in subclasses. */
-- (size_t) node_size;
-- (tree_cmp_t) node_cmp;
-- (tree_cmp_t) dup_node_cmp;
-- (tree_cmp_t) key_node_cmp;
-- (void) fold: (void *) node :(struct tuple *) tuple;
-- (struct tuple *) unfold: (const void *) node;
-
 @end
 
 #endif /* TARANTOOL_BOX_TREE_INDEX_H_INCLUDED */

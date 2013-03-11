@@ -29,6 +29,7 @@
 #include "lua/init.h"
 #include "tarantool.h"
 #include "box/box.h"
+#include "../box/box_lua.h"
 #include "tbuf.h"
 
 #include "lua.h"
@@ -1073,8 +1074,7 @@ tarantool_lua_init()
 	tarantool_lua_session_init(L);
 	tarantool_lua_error_init(L);
 
-	mod_lua_init(L);
-
+	box_lua_init(L);
 	/* clear possible left-overs of init */
 	lua_settop(L, 0);
 	return L;

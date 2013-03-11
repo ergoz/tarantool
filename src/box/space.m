@@ -36,9 +36,12 @@
 #include "tuple.h"
 #include <pickle.h>
 #include <palloc.h>
+#include <fiber.h>
 #include <assoc.h>
 
 #include <box/box.h>
+
+#include "tuple_mem.h"
 
 static struct mh_i32ptr_t *spaces;
 
@@ -169,21 +172,22 @@ space_validate_tuple(struct space *sp, struct tuple *new_tuple)
 			  :"tuple field count must match space cardinality");
 
 	/* Sweep through the tuple and check the field sizes. */
-	const u8 *data = new_tuple->data;
-	for (u32 f = 0; f < sp->max_fieldno; ++f) {
-		/* Get the size of the current field and advance. */
-		u32 len = load_varint32((const void **) &data);
-		data += len;
+	struct tuple_iterator *it = tuple_iterator_new(new_tuple, 0, prealloc);
+	for (u32 field_no = 0; field_no < sp->max_fieldno; field_no++) {
+		const void *field = tuple_iterator_next(it);
+		assert (field != NULL);
+		u32 field_size = load_varint32(&field);
+
 		/*
 		 * Check fixed size fields (NUM and NUM64) and
 		 * skip undefined size fields (STRING and UNKNOWN).
 		 */
-		if (sp->field_types[f] == NUM) {
-			if (len != sizeof(u32))
+		if (sp->field_types[field_no] == NUM) {
+			if (field_size != sizeof(u32))
 				tnt_raise(ClientError, :ER_KEY_FIELD_TYPE,
 					  "u32");
-		} else if (sp->field_types[f] == NUM64) {
-			if (len != sizeof(u64))
+		} else if (sp->field_types[field_no] == NUM64) {
+			if (field_size != sizeof(u64))
 				tnt_raise(ClientError, :ER_KEY_FIELD_TYPE,
 					  "u64");
 		}
@@ -210,6 +214,7 @@ space_free(void)
 		free(space);
 	}
 
+	mh_i32ptr_delete(spaces);
 }
 
 static void
@@ -363,6 +368,22 @@ space_config()
 			key_init(&space->key_defs[j], cfg_index);
 		}
 		space_init_field_types(space);
+
+		/*
+		 * Init tuple format
+		 */
+		uint32_t *indexed_fields = palloc(fiber->gc_pool,
+			sizeof(*indexed_fields) * space->max_fieldno);
+
+		uint32_t indexed_fields_count = 0;
+		for (uint32_t fno = 0; fno < space->max_fieldno; fno++) {
+			if (space->field_types[fno] != UNKNOWN) {
+				indexed_fields[indexed_fields_count++] = fno;
+			}
+		}
+		space->format = tuple_format_mem_new(indexed_fields_count,
+						     indexed_fields);
+		tuple_format_register(space->format);
 
 		/* fill space indexes */
 		for (u32 j = 0; cfg_space->index[j] != NULL; ++j) {
@@ -574,13 +595,13 @@ check_spaces(struct tarantool_cfg *conf)
 				/* hash index must has single-field key */
 				if (key_part_count != 1) {
 					out_warning(0, "(space = %zu index = %zu) "
-					            "hash index must has a single-field key", i, j);
+						    "hash index must has a single-field key", i, j);
 					return -1;
 				}
 				/* hash index must be unique */
 				if (!index->unique) {
 					out_warning(0, "(space = %zu index = %zu) "
-					            "hash index must be unique", i, j);
+						    "hash index must be unique", i, j);
 					return -1;
 				}
 				break;

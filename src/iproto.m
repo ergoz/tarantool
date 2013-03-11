@@ -141,7 +141,10 @@ port_iproto_add_tuple(struct port *ptr, struct tuple *tuple, u32 flags)
 		port->svp = obuf_book(port->buf, sizeof(port->reply));
 	}
 	if (flags & BOX_RETURN_TUPLE) {
-		obuf_dup(port->buf, &tuple->bsize, tuple_len(tuple));
+		uint32_t tuple_bsize = tuple_write_size(tuple);
+		obuf_dup(port->buf, &tuple_bsize, sizeof(uint32_t));
+		obuf_dup(port->buf, &tuple->field_count, sizeof(uint32_t));
+		tuple_writev(tuple, port->buf);
 	}
 }
 

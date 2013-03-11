@@ -76,6 +76,8 @@ struct space {
 
 	/** Space number. */
 	u32 no;
+
+	struct tuple_format *format;
 };
 
 
