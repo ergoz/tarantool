@@ -26,7 +26,7 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#include "slab_cache.h"
+#include "lib/small/slab_cache.h"
 #include <sys/mman.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,7 +58,7 @@ slab_order(size_t size)
 
 /** Convert slab order to the mmap()ed size. */
 static inline intptr_t
-slab_size(uint8_t order)
+order_size(uint8_t order)
 {
 	assert(order <= SLAB_ORDER_LAST);
 	return 1 << (order + SLAB_MIN_SIZE_LB);
@@ -74,7 +74,7 @@ slab_from_ptr(void *ptr, uint8_t order)
 	assert(order <= SLAB_ORDER_LAST);
 	intptr_t addr = (intptr_t) ptr;
 	/** All memory mapped slabs are slab->size aligned. */
-	struct slab *slab = (struct slab *) (addr & ~(slab_size(order) - 1));
+	struct slab *slab = (struct slab *) (addr & ~(order_size(order) - 1));
 	assert(slab->magic == slab_magic && slab->order == order);
 	return slab;
 }
@@ -86,9 +86,9 @@ slab_check(struct slab *slab)
 	assert(slab->magic == slab_magic);
 	assert(slab->order <= SLAB_HUGE);
 	assert(slab->order == SLAB_HUGE ||
-	       (((intptr_t) slab & ~(slab_size(slab->order) - 1)) ==
+	       (((intptr_t) slab & ~(order_size(slab->order) - 1)) ==
 		(intptr_t) slab &&
-	       slab->size == slab_size(slab->order)));
+	       slab->size == order_size(slab->order)));
 }
 
 /** Mark a slab as free. */
@@ -146,7 +146,7 @@ slab_mmap(uint8_t order)
 {
 	assert(order <= SLAB_ORDER_LAST);
 
-	size_t size = slab_size(order);
+	size_t size = order_size(order);
 	/*
 	 * mmap twice the requested amount to be able to align
 	 * the mapped address.
@@ -182,7 +182,7 @@ slab_buddy(struct slab *slab)
 	if (slab->order == SLAB_ORDER_LAST)
 		return NULL;
 	/* The buddy address has its respective bit negated. */
-	return (void *) ((intptr_t) slab ^ slab_size(slab->order));
+	return (void *) ((intptr_t) slab ^ order_size(slab->order));
 
 }
 
@@ -192,7 +192,7 @@ slab_split(struct slab_cache *cache, struct slab *slab)
 	assert(slab->order > 0);
 
 	uint8_t new_order = slab->order - 1;
-	size_t new_size = slab_size(new_order);
+	size_t new_size = order_size(new_order);
 
 	slab_create(slab, new_order, new_size);
 	struct slab *buddy = slab_buddy(slab);
@@ -210,7 +210,7 @@ slab_merge(struct slab *slab, struct slab *buddy)
 	/** Remove the buddy from the free list. */
 	rlist_del_entry(buddy, next_in_class);
 	merged->order++;
-	merged->size = slab_size(merged->order);
+	merged->size = order_size(merged->order);
 	return merged;
 }
 
@@ -243,7 +243,7 @@ slab_cache_destroy(struct slab_cache *cache)
 			 * it is wrong if the slab was reformatted
 			 * for a smaller class.
 		         */
-			munmap_checked(slab, slab_size(SLAB_ORDER_LAST));
+			munmap_checked(slab, order_size(SLAB_ORDER_LAST));
 		}
 	}
 }

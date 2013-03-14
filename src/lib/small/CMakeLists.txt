@@ -1,2 +1,3 @@
-add_library(small slab_cache.c region.c)
-include_directories(${CMAKE_SOURCE_DIR}/include/lib/small)
+set(lib_sources slab_cache.c region.c)
+set_source_files_compile_flags(${lib_sources})
+add_library(small ${lib_sources})

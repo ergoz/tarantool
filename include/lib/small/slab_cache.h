@@ -129,4 +129,10 @@ slab_sizeof()
 	return slab_align(sizeof(struct slab), sizeof(intptr_t));
 }
 
+static inline size_t
+slab_size(struct slab *slab)
+{
+	return slab->size - slab_sizeof();
+}
+
 #endif /* INCLUDES_TARANTOOL_SLAB_CACHE_H */

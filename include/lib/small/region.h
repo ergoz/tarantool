@@ -73,6 +73,8 @@
 
 enum { REGION_NAME_MAX = 30 };
 
+struct slab_cache;
+
 struct region
 {
 	struct slab_cache *slab_cache;
@@ -91,6 +93,7 @@ region_create(struct region *region, struct slab_cache *slab_cache)
 	region->slab_cache = slab_cache;
 	rlist_create(&region->slabs);
 	region->used = 0;
+	region->name[0] = '\0';
 }
 
 /**
@@ -126,7 +129,7 @@ rslab_data(struct rslab *slab)
 
 /** How much memory is available in a given block? */
 static inline size_t
-slab_unused(struct rslab *slab)
+rslab_unused(struct rslab *slab)
 {
 	return slab->slab.size - rslab_sizeof() - slab->used;
 }
@@ -138,7 +141,7 @@ slab_unused(struct rslab *slab)
 static inline void *
 slab_alloc(struct rslab *slab, size_t size)
 {
-	assert(size <= slab_unused(slab));
+	assert(size <= rslab_unused(slab));
 	void *ptr = rslab_data(slab) + slab->used;
 	slab->used += size;
 	return ptr;
@@ -155,7 +158,7 @@ region_alloc_nothrow(struct region *region, size_t size)
 		struct rslab *slab = rlist_first_entry(&region->slabs,
 						       struct rslab,
 						       next_in_region);
-		if (size <= slab_unused(slab)) {
+		if (size <= rslab_unused(slab)) {
 			region->used += size;
 			return slab_alloc(slab, size);
 		}
@@ -206,5 +209,26 @@ region_name(struct region *region)
 {
 	return region->name;
 }
+
+#if defined(__OBJC__)
+#include "exception.h"
+
+static inline void *
+region_alloc(struct region *region, size_t size)
+{
+
+	void *ptr = region_alloc_nothrow(region, size);
+	if (ptr == NULL)
+		tnt_raise(LoggedError, :ER_MEMORY_ISSUE,
+			  size, "region", "new slab");
+	return ptr;
+}
+
+static inline void *
+region_calloc(struct region *region, size_t size)
+{
+	return memset(region_alloc(region, size), 0, size);;
+}
+#endif /* __OBJC__ */
 
 #endif /* INCLUDES_TARANTOOL_SMALL_REGION_H */

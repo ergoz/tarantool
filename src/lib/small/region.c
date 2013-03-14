@@ -26,7 +26,7 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#include "region.h"
+#include "lib/small/region.h"
 
 void *
 region_alloc_slow(struct region *region, size_t size)
