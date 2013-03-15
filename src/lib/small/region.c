@@ -44,9 +44,8 @@ region_alloc_slow(struct region *region, size_t size)
 	 * region, even if it is full, otherwise,
 	 * region_truncate() won't work.
 	 */
-	rlist_add_entry(&region->slabs, slab,
-			next_in_region);
-	region->used += size;
+	slab_list_add(&region->slabs, &slab->slab, next_in_list);
+	region->slabs.stats.used += size;
 	return rslab_data(slab);
 }
 
@@ -54,11 +53,11 @@ void
 region_free(struct region *region)
 {
 	struct rslab *slab, *tmp;
-	rlist_foreach_entry_safe(slab, &region->slabs, next_in_region, tmp)
+	rlist_foreach_entry_safe(slab, &region->slabs.slabs,
+				 slab.next_in_list, tmp)
 		slab_put(region->slab_cache, &slab->slab);
 
-	rlist_create(&region->slabs);
-	region->used = 0;
+	slab_list_create(&region->slabs);
 }
 
 /**
@@ -68,13 +67,13 @@ region_free(struct region *region)
 void
 region_truncate(struct region *region, size_t new_size)
 {
-	assert(new_size <= region->used);
+	assert(new_size <= region_used(region));
 
-	ssize_t cut_size = region->used - new_size;
-	while (! rlist_empty(&region->slabs)) {
-		struct rslab *slab = rlist_first_entry(&region->slabs,
+	ssize_t cut_size = region_used(region) - new_size;
+	while (! rlist_empty(&region->slabs.slabs)) {
+		struct rslab *slab = rlist_first_entry(&region->slabs.slabs,
 						       struct rslab,
-						       next_in_region);
+						       slab.next_in_list);
 		if (slab->used > cut_size) {
 			/* This is the last slab to trim. */
 			slab->used -= cut_size;
@@ -83,10 +82,10 @@ region_truncate(struct region *region, size_t new_size)
 		}
 		cut_size -= slab->used;
 		/* Remove the entire slab. */
-		rlist_del_entry(slab, next_in_region);
+		slab_list_del(&region->slabs, &slab->slab, next_in_list);
 		slab_put(region->slab_cache, &slab->slab);
 	}
 	assert(cut_size == 0);
-	region->used = new_size;
+	region->slabs.stats.used = new_size;
 }
 

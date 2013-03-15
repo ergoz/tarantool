@@ -78,8 +78,7 @@ struct slab_cache;
 struct region
 {
 	struct slab_cache *slab_cache;
-	struct rlist slabs;
-	size_t used;
+	struct slab_list slabs;
 	char name[REGION_NAME_MAX];
 };
 
@@ -91,8 +90,7 @@ static inline void
 region_create(struct region *region, struct slab_cache *slab_cache)
 {
 	region->slab_cache = slab_cache;
-	rlist_create(&region->slabs);
-	region->used = 0;
+	slab_list_create(&region->slabs);
 	region->name[0] = '\0';
 }
 
@@ -111,7 +109,6 @@ struct rslab
 	 * extra members.
 	 */
 	struct slab slab;
-	struct rlist next_in_region;
 	uint32_t used;
 };
 
@@ -154,12 +151,12 @@ region_alloc_slow(struct region *region, size_t size);
 static inline void *
 region_alloc_nothrow(struct region *region, size_t size)
 {
-	if (! rlist_empty(&region->slabs)) {
-		struct rslab *slab = rlist_first_entry(&region->slabs,
+	if (! rlist_empty(&region->slabs.slabs)) {
+		struct rslab *slab = rlist_first_entry(&region->slabs.slabs,
 						       struct rslab,
-						       next_in_region);
+						       slab.next_in_list);
 		if (size <= rslab_unused(slab)) {
-			region->used += size;
+			region->slabs.stats.used += size;
 			return slab_alloc(slab, size);
 		}
 	}
@@ -172,11 +169,11 @@ region_alloc_nothrow(struct region *region, size_t size)
 static inline void
 region_reset(struct region *region)
 {
-	if (! rlist_empty(&region->slabs)) {
-		struct rslab *slab = rlist_first_entry(&region->slabs,
+	if (! rlist_empty(&region->slabs.slabs)) {
+		struct rslab *slab = rlist_first_entry(&region->slabs.slabs,
 						       struct rslab,
-						       next_in_region);
-		region->used -= slab->used;
+						       slab.next_in_list);
+		region->slabs.stats.used -= slab->used;
 		slab->used = 0;
 	}
 }
@@ -185,7 +182,7 @@ region_reset(struct region *region)
 static inline size_t
 region_used(struct region *region)
 {
-	return region->used;
+	return region->slabs.stats.used;
 }
 
 static inline void

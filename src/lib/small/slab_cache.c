@@ -80,7 +80,7 @@ slab_from_ptr(void *ptr, uint8_t order)
 }
 
 static inline void
-slab_check(struct slab *slab)
+slab_assert(struct slab *slab)
 {
 	(void) slab;
 	assert(slab->magic == slab_magic);
@@ -93,15 +93,19 @@ slab_check(struct slab *slab)
 
 /** Mark a slab as free. */
 static inline void
-slab_set_free(struct slab *slab)
+slab_set_free(struct slab_cache *cache, struct slab *slab)
 {
 	assert(slab->in_use == slab->order + 1);		/* Sanity. */
+	cache->allocated.stats.used -= slab->size;
+	cache->orders[slab->order].stats.used -= slab->size;
 	slab->in_use = 0;
 }
 
 static inline void
-slab_set_used(struct slab *slab)
+slab_set_used(struct slab_cache *cache, struct slab *slab)
 {
+	cache->allocated.stats.used += slab->size;
+	cache->orders[slab->order].stats.used += slab->size;
 	/* Not a boolean to have an extra assert. */
 	slab->in_use = 1 + slab->order;
 }
@@ -197,18 +201,17 @@ slab_split(struct slab_cache *cache, struct slab *slab)
 	slab_create(slab, new_order, new_size);
 	struct slab *buddy = slab_buddy(slab);
 	slab_create(buddy, new_order, new_size);
-	rlist_add_entry(&cache->classes[new_order].free_slabs,
-			buddy, next_in_class);
+	slab_list_add(&cache->orders[buddy->order], buddy, next_in_list);
 	return slab;
 }
 
 static inline struct slab *
-slab_merge(struct slab *slab, struct slab *buddy)
+slab_merge(struct slab_cache *cache, struct slab *slab, struct slab *buddy)
 {
 	assert(slab_buddy(slab) == buddy);
 	struct slab *merged = slab > buddy ? buddy : slab;
 	/** Remove the buddy from the free list. */
-	rlist_del_entry(buddy, next_in_class);
+	slab_list_del(&cache->orders[buddy->order], buddy, next_in_list);
 	merged->order++;
 	merged->size = order_size(merged->order);
 	return merged;
@@ -218,30 +221,28 @@ void
 slab_cache_create(struct slab_cache *cache)
 {
 	for (uint8_t i = 0; i <= SLAB_ORDER_LAST; i++)
-		rlist_create(&cache->classes[i].free_slabs);
-	rlist_create(&cache->allocated_slabs);
+		slab_list_create(&cache->orders[i]);
+	slab_list_create(&cache->allocated);
 }
 
 void
 slab_cache_destroy(struct slab_cache *cache)
 {
-	struct rlist *slabs = &cache->allocated_slabs;
+	struct rlist *slabs = &cache->allocated.slabs;
 	/*
-	 * allocated_slabs contains huge allocations and
+	 * allocated contains huge allocations and
 	 * slabs of the largest order. All smaller slabs are
 	 * obtained from larger slabs by splitting.
          */
-	while (! rlist_empty(slabs)) {
-		struct slab *slab = rlist_shift_entry(slabs,
-						      struct slab,
-						      next_in_cache);
+	struct slab *slab, *tmp;
+	rlist_foreach_entry_safe(slab, slabs, next_in_cache, tmp) {
 		if (slab->order == SLAB_HUGE)
 			free(slab);
 		else {
 			/*
 			 * Don't trust slab->size or slab->order,
-			 * it is wrong if the slab was reformatted
-			 * for a smaller class.
+			 * it is wrong if the slab header was
+			 * reformatted for a smaller order.
 		         */
 			munmap_checked(slab, order_size(SLAB_ORDER_LAST));
 		}
@@ -266,8 +267,8 @@ slab_get(struct slab_cache *cache, size_t size)
 		if (slab == NULL)
 			return NULL;
 		slab_create(slab, order, size);
-		rlist_add_entry(&cache->allocated_slabs, slab,
-				next_in_cache);
+		slab_list_add(&cache->allocated, slab, next_in_cache);
+		cache->allocated.stats.used += size;
 		return slab;
 	}
 	struct slab *slab;
@@ -276,25 +277,40 @@ slab_get(struct slab_cache *cache, size_t size)
 	 * If SLAB_ORDER_LAST is reached and there are no
 	 * free slabs, allocate a new one.
 	 */
-	struct slab_class *class = &cache->classes[order];
+	struct slab_list *list= &cache->orders[order];
 
-	for ( ; rlist_empty(&class->free_slabs); class++) {
-		if (class == cache->classes + SLAB_ORDER_LAST) {
+	for ( ; rlist_empty(&list->slabs); list++) {
+		if (list == cache->orders + SLAB_ORDER_LAST) {
 			slab = slab_mmap(SLAB_ORDER_LAST);
 			if (slab == NULL)
 				return NULL;
 			slab_poison(slab);
-			rlist_add_entry(&cache->allocated_slabs, slab,
-					next_in_cache);
-			goto found;
+			slab_list_add(&cache->allocated, slab,
+				      next_in_cache);
+			slab_list_add(list, slab, next_in_list);
+			break;
 		}
 	}
-	slab = rlist_shift_entry(&class->free_slabs, struct slab,
-				 next_in_class);
-found:
-	while (slab->order != order)
-		slab = slab_split(cache, slab);
-	slab_set_used(slab);
+	slab = rlist_shift_entry(&list->slabs, struct slab, next_in_list);
+	if (slab->order != order) {
+		/*
+		 * Do not "bill" the size of this slab to this
+		 * order, to prevent double accounting of the
+		 * same memory.
+		 */
+		list->stats.total -= slab->size;
+		/* Get a slab of the right order. */
+		do {
+			slab = slab_split(cache, slab);
+		} while (slab->order != order);
+		/*
+		 * Count the slab in this order. The buddy is
+		 * already taken care of by slab_split.
+		 */
+		cache->orders[slab->order].stats.total += slab->size;
+	}
+	slab_set_used(cache, slab);
+	slab_assert(slab);
 	return slab;
 }
 
@@ -302,30 +318,131 @@ found:
 void
 slab_put(struct slab_cache *cache, struct slab *slab)
 {
-	slab_check(slab);
+	slab_assert(slab);
 	if (slab->order == SLAB_HUGE) {
 		/*
 		 * Free a huge slab right away, we have no
 		 * further business to do with it.
 		 */
-		rlist_del_entry(slab, next_in_cache);
+		slab_list_del(&cache->allocated, slab, next_in_cache);
+		cache->allocated.stats.used -= slab->size;
 		free(slab);
 		return;
 	}
 	/* An "ordered" slab is returned to the cache. */
-	slab_set_free(slab);
+	slab_set_free(cache, slab);
 	struct slab *buddy = slab_buddy(slab);
 	/*
 	 * The buddy slab could also have been split into a pair
 	 * of smaller slabs, the first of which happens to be
 	 * free. To not merge with a slab which is in fact
 	 * partially occupied, first check that slab orders match.
+	 *
+	 * A slab is not accounted in "used" or "total" counters
+	 * if it was split into slabs of a lower order.
+	 * cache->orders statistics only contains sizes of either
+	 * slabs returned by slab_get, or present in the free
+	 * list. This ensures that sums of cache->orders[i].stats
+	 * match the totals in cache->allocated.stats.
 	 */
-	while (buddy && buddy->order == slab->order && slab_is_free(buddy)) {
-		slab = slab_merge(slab, buddy);
-		buddy = slab_buddy(slab);
+	if (buddy && buddy->order == slab->order && slab_is_free(buddy)) {
+		cache->orders[slab->order].stats.total -= slab->size;
+		do {
+			slab = slab_merge(cache, slab, buddy);
+			buddy = slab_buddy(slab);
+		} while (buddy && buddy->order == slab->order &&
+			 slab_is_free(buddy));
+		cache->orders[slab->order].stats.total += slab->size;
 	}
 	slab_poison(slab);
-	rlist_add_entry(&cache->classes[slab->order].free_slabs, slab,
-			next_in_class);
+	rlist_add_entry(&cache->orders[slab->order].slabs, slab, next_in_list);
+}
+
+void
+slab_cache_check(struct slab_cache *cache)
+{
+	size_t total = 0;
+	size_t used = 0;
+	size_t ordered = 0;
+	size_t huge = 0;
+	bool dont_panic = true;
+
+	struct rlist *slabs = &cache->allocated.slabs;
+	struct slab *slab;
+
+	rlist_foreach_entry(slab, slabs, next_in_cache) {
+		if (slab->magic != slab_magic) {
+			fprintf(stderr, "%s: incorrect slab magic,"
+				" expected %d, got %d", __func__,
+				slab_magic, slab->magic);
+			dont_panic = false;
+		}
+		if (slab->order == SLAB_HUGE) {
+			huge += slab->size;
+			used += slab->size;
+			total += slab->size;
+		} else {
+			if (slab->size != order_size(slab->order)) {
+				fprintf(stderr, "%s: incorrect slab size,"
+					" expected %zu, got %zu", __func__,
+					order_size(slab->order), slab->size);
+				dont_panic = false;
+			}
+			/*
+			 * The slab may have been reformatted
+			 * and split into smaller slabs, don't
+			 * trust slab->size.
+			 */
+			total += order_size(SLAB_ORDER_LAST);
+		}
+	}
+
+	if (total != cache->allocated.stats.total) {
+		fprintf(stderr, "%s: incorrect slab statistics, total %zu,"
+			" factual %zu\n", __func__,
+			cache->allocated.stats.total,
+			total);
+		dont_panic = false;
+	}
+
+	for (struct slab_list *list = cache->orders;
+	     list <= cache->orders + SLAB_ORDER_LAST;
+	     list++) {
+
+		uint8_t order = order_size(list - cache->orders);
+		ordered += list->stats.total;
+	        used += list->stats.used;
+
+		if (list->stats.total % order_size(order)) {
+			fprintf(stderr, "%s: incorrect order statistics, the"
+				" total %zu is not multiple of slab size %zu\n",
+				__func__, list->stats.total,
+				order_size(order));
+			dont_panic = false;
+		}
+		if (list->stats.used % order_size(order)) {
+			fprintf(stderr, "%s: incorrect order statistics, the"
+				" used %zu is not multiple of slab size %zu\n",
+				__func__, list->stats.used,
+				order_size(order));
+			dont_panic = false;
+		}
+	}
+
+	if (ordered + huge != total) {
+		fprintf(stderr, "%s: incorrect totals, ordered %zu, "
+			" huge %zu, total %zu\n", __func__,
+			ordered, huge, total);
+		dont_panic = false;
+	}
+	if (used != cache->allocated.stats.used) {
+		fprintf(stderr, "%s: incorrect used total, "
+			"total %zu, sum %zu\n", __func__,
+			cache->allocated.stats.used,
+			used);
+		dont_panic = false;
+	}
+	if (dont_panic)
+		return;
+	abort();
 }

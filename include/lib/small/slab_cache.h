@@ -35,15 +35,16 @@
 
 enum {
 	/*
-	 * Slab classes 0 to 8 are ordered, i.e. their size is
-	 * a power of 2 and their address is aligned to slab size.
-	 * They are obtained either using mmap(), or by splitting
-	 * an mmapped() slab of higher order (buddy system).
+	 * Slabs of "order" from 0 to 8 have size which is a power
+	 * of 2.  They are obtained either using mmap(), or by
+	 * splitting an mmapped() slab of higher order (buddy
+	 * system).  Memory address of such slab is aligned to
+	 * slab size.
 	 */
 	SLAB_ORDER_LAST = 8,
 	/*
-	 * The last class contains huge slabs, allocated with
-	 * malloc(). This class is maintained to make life of
+	 * The last "order" contains huge slabs, allocated with
+	 * malloc(). This order is provided to make life of
 	 * slab_cache user easier, so that one doesn't have to
 	 * worry about allocation sizes larger than SLAB_MAX_SIZE.
 	 */
@@ -72,32 +73,79 @@ struct slab {
 	 * (i.e. slab->order is SLAB_CLASS_LAST).
 	 */
 	size_t size;
-	/** Next slab in class->free_slabs list, if this slab is free. */
-	struct rlist next_in_class;
 	/*
-	 * Next slab in the list of allocated slabs. Unused
-	 * if a slab has a buddy. Sic: if a slab is not allocated
+	 * Next slab in the list of allocated slabs. Unused if
+	 * this slab has a buddy. Sic: if a slab is not allocated
 	 * but is made by a split of a larger (allocated) slab,
-	 * this member got to be left intact.
+	 * this member got to be left intact, to not corrupt
+	 * cache->allocated list.
 	 */
 	struct rlist next_in_cache;
+	/** Next slab in slab_list->slabs list. */
+	struct rlist next_in_list;
 };
 
-struct slab_class {
-	struct rlist free_slabs;
+/** Allocation statistics. */
+struct slab_stats {
+	size_t used;
+	size_t total;
 };
+
+static inline void
+slab_stats_reset(struct slab_stats *stats)
+{
+	stats->used = stats->total = 0;
+}
+
+/**
+ * A general purpose list of slabs. Is used
+ * to store unused slabs of a certain order in the
+ * slab cache, as well as to contain allocated
+ * slabs of a specialized allocator.
+ */
+struct slab_list {
+	struct rlist slabs;
+	/** Total/used bytes in this list. */
+	struct slab_stats stats;
+};
+
+#define slab_list_add(list, slab, member)		\
+do {							\
+	rlist_add_entry(&(list)->slabs, (slab), member);\
+	(list)->stats.total += (slab)->size;		\
+} while (0)
+
+#define slab_list_del(list, slab, member)		\
+do {							\
+	rlist_del_entry((slab), member);                \
+	(list)->stats.total -= (slab)->size;		\
+} while (0)
+
+static inline void
+slab_list_create(struct slab_list *list)
+{
+	rlist_create(&list->slabs);
+	slab_stats_reset(&list->stats);
+}
 
 struct slab_cache {
 	/**
-	 * Slabs are ordered by size, which is
-	 * a multiple of two. classes[0] contains
-	 * slabs of size SLAB_MIN_SIZE (order 0).
-	 * classes[1] contains slabs of 2 * SLAB_MIN_SIZE,
-	 * and so on.
+	 * Slabs are ordered by size, which is a multiple of two.
+	 * orders[0] contains slabs of size SLAB_MIN_SIZE
+	 * (order 0). orders[1] contains slabs of
+	 * 2 * SLAB_MIN_SIZE, and so on. The list only contains
+	 * unused slabs - a used slab is removed from the
+	 * slab_cache list and its next_in_list link may
+	 * be reused for some other purpose.
+	 * Note, that SLAB_HUGE slabs are not accounted
+	 * here, since they are never reused.
          */
-	struct slab_class classes[SLAB_ORDER_LAST + 1];
-	/** All allocated slabs used in the cache. */
-	struct rlist allocated_slabs;
+	struct slab_list orders[SLAB_ORDER_LAST + 1];
+	/** All allocated slabs used in the cache.
+	 * The stats reflect the total used/allocated
+	 * memory in the cache.
+	 */
+	struct slab_list allocated;
 };
 
 void
@@ -134,5 +182,8 @@ slab_size(struct slab *slab)
 {
 	return slab->size - slab_sizeof();
 }
+
+void
+slab_cache_check(struct slab_cache *cache);
 
 #endif /* INCLUDES_TARANTOOL_SLAB_CACHE_H */

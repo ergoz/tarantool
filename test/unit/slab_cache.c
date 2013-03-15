@@ -1,9 +1,9 @@
 #include "lib/small/slab_cache.h"
 #include <stdio.h>
 #include <limits.h>
-#include <assert.h>
 #include <stdlib.h>
 #include <time.h>
+#include "unit.h"
 
 
 enum { NRUNS = 100, ITERATIONS = 1000, MAX_ALLOC = SLAB_MAX_SIZE + 9999 };
@@ -25,7 +25,8 @@ int main()
 			slab_put(&cache, runs[run]);
 		}
 		runs[run] = slab_get(&cache, size);
-		assert(runs[run]);
+		fail_unless(runs[run]);
+		slab_cache_check(&cache);
 		i++;
 	}
 
