@@ -1,41 +1,256 @@
 box.flags = { BOX_RETURN_TUPLE = 0x01, BOX_ADD = 0x02, BOX_REPLACE = 0x04 }
 
+
+box.remote = {}
+box.remote.lib = {
+    delete = function(self, space, ...)
+        local key_part_count = select('#', ...)
+        return self:process(21,
+                box.pack('iiV',
+                    space,
+                    box.flags.BOX_RETURN_TUPLE,  -- flags
+                    key_part_count, ...))
+    end,
+
+    replace = function(self, space, ...)
+        local field_count = select('#', ...)
+        return self:process(13,
+                box.pack('iiV',
+                    space,
+                    box.flags.BOX_RETURN_TUPLE,  -- flags
+                    field_count, ...))
+    end,
+
+    -- insert a tuple (produces an error if the tuple already exists)
+    insert = function(self, space, ...)
+        local field_count = select('#', ...)
+        return self:process(13,
+               box.pack('iiV',
+                    space,
+                    bit.bor(box.flags.BOX_RETURN_TUPLE,
+                            box.flags.BOX_ADD),  -- flags
+                    field_count, ...))
+    end,
+
+    --
+    update = function(self, space, key, format, ...)
+        local op_count = select('#', ...)/2
+        return self:process(19,
+               box.pack('iiVi'..format,
+                    space,
+                    box.flags.BOX_RETURN_TUPLE,
+                    1, key,
+                    op_count,
+                    ...))
+    end,
+
+    select_limit = function(self, space, index, offset, limit, ...)
+        local key_part_count = select('#', ...)
+        return self:process(17,
+               box.pack('iiiiiV',
+                     space,
+                     index,
+                     offset,
+                     limit,
+                     1, -- key count
+                     key_part_count, ...))
+    end,
+
+    select = function(self, space, index, ...)
+        local key_part_count = select('#', ...)
+        return self:process(17,
+                box.pack('iiiiiV',
+                     space,
+                     index,
+                     0, -- offset
+                     4294967295, -- limit
+                     1, -- key count
+                     key_part_count, ...))
+    end,
+
+    call    = function(self, proc_name, ...)
+        local count = select('#', ...)
+        return self:process(22,
+            box.pack('iwaV',
+                0,                      -- flags
+                string.len(proc_name),
+                proc_name,
+                count,
+                ...))
+    end,
+
+    select_range = function(self, ...)
+        return self:call('box.select_range', ...)
+    end,
+
+    select_reverse_range = function(self, sno, ino, limit, ...)
+        return self:call('box.select_reverse_range', ...)
+    end,
+
+
+}
+
+
+-- local tarantool
+box.remote.localhost = {
+    process = function(self, ...)
+        return box.process(...)
+    end,
+    
+    select_range = function(self, sno, ino, limit, ...)
+        return box.space[tonumber(sno)].index[tonumber(ino)]:select_range(tonumber(limit), ...)
+    end,
+
+    select_reverse_range = function(self, sno, ino, limit, ...)
+        return box.space[tonumber(sno)].index[tonumber(ino)]:select_reverse_range(tonumber(limit), ...)
+    end,
+
+    call = function(self, proc_name, ...)
+        local fref = _G
+        for spath in string.gmatch(proc_name, '([^.]+)') do
+            fref = fref[spath]
+            if fref == nil then
+                error("function '" .. proc_name .. "' was not found")
+            end
+        end
+        if type(fref) ~= 'function' then
+            error("object '" .. proc_name .. "' is not a function")
+        end
+        return fref(...)
+    end
+}
+
+setmetatable(box.remote.localhost, { __index = box.remote.lib })
+
+
+box.remote.new = function(host, port, timeout)
+
+    local remote = {
+        processing = {
+            last_sync = 0,
+            next_sync = function(self)
+                while true do
+                    if self[ self.last_sync ] == nil then
+                        return self.last_sync
+                    end
+
+                    self.last_sync = self.last_sync + 1
+                    if self.last_sync > 0x7FFFFFFF then
+                        self.last_sync = 0
+                    end
+                end
+            end
+        },
+        connect = {
+            host    = host,
+            port    = port,
+            timeout = timeout
+        },
+
+        process = function(self, ...)
+            if self.s == nil then
+                self.s = box.socket.tcp()
+            end
+            if self.s == nil then
+                return nil, "Can not create socket"
+            end
+            if self.connect.timeout == nil then
+                local res = {
+                    self.s:connect(
+                        self.connect.host,
+                        self.connect.port,
+                        self.connect.timeout)
+                }
+                if res[1] == nil then
+                    return nil, res[4]
+                end
+            end
+
+            self.connect = nil      -- cleanup some resources
+            self.process = self.connected_process
+
+            self.read_fiber = box.fiber.create(
+                function()
+                    box.fiber.detach()
+                    while true do
+                        -- TODO: error handling
+                        local header, status, errno, errstr = self.s:recv(12)
+                        local op, blen, sync = box.unpack('iii')
+
+                        local body = ''
+                        if blen > 0 then
+                            body, status, errno, errstr = self.s:recv(blen)
+                        end
+                        if self.processing[sync] ~= nil then
+                            local ch = self.processing[sync]
+                            self.processing[sync] = nil
+                            ch:put(header .. body)
+                        else
+                            print("Unexpected response ", sync)
+                        end
+                    end
+                end
+            )
+
+            box.fiber.resume(self.read_fiber)
+
+            return self:process(...)
+        end,
+
+        connected_process = function(self, op, request)
+            local sync = self.processing:next_sync()
+            request = box.pack('iiia', op, string.len(request), sync, request)
+
+            local res = { self.s:send(request) }
+            if res[3] ~= nil then
+                return nil, res[3]
+            end
+
+            return self:wait_response(sync)
+        end,
+        
+        wait_response = function(self, sync)
+            self.processing[sync] = box.ipc.channel(1)
+            local response = self.processing[sync]:get()
+            -- TODO: parse
+            return response
+        end
+    }
+
+    setmetatable(
+        remote, {
+            __index = box.remote.lib,
+            __gc = function(self)
+                if self.s ~= nil then
+                    self.s:close()
+                    self.s = nil
+                end
+            end
+        }
+    )
+end
+
+
+--
+--
+--
+function box.call(proc_name, ...)
+    return box.remote.localhost:call(proc_name, ...)
+end
+
 --
 --
 --
 function box.select_limit(space, index, offset, limit, ...)
-    local key_part_count = select('#', ...)
-    return box.process(17,
-                       box.pack('iiiiiV',
-                                 space,
-                                 index,
-                                 offset,
-                                 limit,
-                                 1, -- key count
-                                 key_part_count, ...))
+    return box.remote.localhost:select_limit(space, index, offset, limit, ...)
 end
 
-function box.dostring(s, ...)
-    local chunk, message = loadstring(s)
-    if chunk == nil then
-        error(message, 2)
-    end
-    return chunk(...)
-end
 
 --
 --
 --
 function box.select(space, index, ...)
-    local key_part_count = select('#', ...)
-    return box.process(17,
-                       box.pack('iiiiiV',
-                                 space,
-                                 index,
-                                 0, -- offset
-                                 4294967295, -- limit
-                                 1, -- key count
-                                 key_part_count, ...))
+    return box.remote.localhost:select(space, index, ...)
 end
 
 --
@@ -44,7 +259,7 @@ end
 -- starts from the key.
 --
 function box.select_range(sno, ino, limit, ...)
-    return box.space[tonumber(sno)].index[tonumber(ino)]:select_range(tonumber(limit), ...)
+    return box.remote.localhost:select_range(sno, ino, limit, ...)
 end
 
 --
@@ -53,7 +268,7 @@ end
 -- starts from the key.
 --
 function box.select_reverse_range(sno, ino, limit, ...)
-    return box.space[tonumber(sno)].index[tonumber(ino)]:select_reverse_range(tonumber(limit), ...)
+    return box.remote.localhost:select_reverse_range(sno, ino, limit, ...)
 end
 
 --
@@ -61,45 +276,31 @@ end
 -- index is always 0. It doesn't accept compound keys
 --
 function box.delete(space, ...)
-    local key_part_count = select('#', ...)
-    return box.process(21,
-                       box.pack('iiV',
-                                 space,
-                                 box.flags.BOX_RETURN_TUPLE,  -- flags
-                                 key_part_count, ...))
+    return box.remote.localhost:delete(space, ...)
 end
 
 -- insert or replace a tuple
 function box.replace(space, ...)
-    local field_count = select('#', ...)
-    return box.process(13,
-                       box.pack('iiV',
-                                 space,
-                                 box.flags.BOX_RETURN_TUPLE,  -- flags
-                                 field_count, ...))
+    return box.remote.localhost:replace(space, ...)
 end
 
 -- insert a tuple (produces an error if the tuple already exists)
 function box.insert(space, ...)
-    local field_count = select('#', ...)
-    return box.process(13,
-                       box.pack('iiV',
-                                space,
-                                bit.bor(box.flags.BOX_RETURN_TUPLE,
-                                        box.flags.BOX_ADD),  -- flags
-                                field_count, ...))
+    return box.remote.localhost:insert(space, ...)
 end
 
 --
 function box.update(space, key, format, ...)
-    local op_count = select('#', ...)/2
-    return box.process(19,
-                       box.pack('iiVi'..format,
-                                space,
-                                box.flags.BOX_RETURN_TUPLE,
-                                1, key,
-                                op_count,
-                                ...))
+    return box.remote.localhost:update(space, key, format, ...)
+end
+
+
+function box.dostring(s, ...)
+    local chunk, message = loadstring(s)
+    if chunk == nil then
+        error(message, 2)
+    end
+    return chunk(...)
 end
 
 -- Assumes that spaceno has a TREE int32 (NUM) or int64 (NUM64) primary key
