@@ -1650,6 +1650,11 @@ lbox_unpack(struct lua_State *L)
 			u32buf = pick_varint32(&s, end);
 			lua_pushnumber(L, u32buf);
 			break;
+		case 'a':
+		case 'A':
+			lua_pushlstring(L, s, end - s);
+			s = end;
+			break;
 		case 'P':
 		case 'p':
 			/* pick_varint32 throws exception on error. */

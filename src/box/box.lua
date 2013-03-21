@@ -32,7 +32,7 @@ box.remote.lib = {
                     field_count, ...))
     end,
 
-    --
+    -- update a tuple
     update = function(self, space, key, format, ...)
         local op_count = select('#', ...)/2
         return self:process(19,
@@ -117,6 +117,10 @@ box.remote.localhost = {
             error("object '" .. proc_name .. "' is not a function")
         end
         return fref(...)
+    end,
+
+    ping = function(self)
+        return true
     end
 }
 
@@ -147,7 +151,7 @@ box.remote.new = function(host, port, timeout)
             timeout = timeout
         },
 
-        process = function(self, ...)
+        connect_process = function(self, ...)
             if self.s == nil then
                 self.s = box.socket.tcp()
             end
@@ -166,7 +170,6 @@ box.remote.new = function(host, port, timeout)
                 end
             end
 
-            self.connect = nil      -- cleanup some resources
             self.process = self.connected_process
 
             self.read_fiber = box.fiber.create(
@@ -203,19 +206,43 @@ box.remote.new = function(host, port, timeout)
 
             local res = { self.s:send(request) }
             if res[3] ~= nil then
+                -- all socket errors are fatal
+                for sync, ch in pairs(self.processing) do
+                    if type(sync) == 'number' then
+                        self.processing[sync] = nil
+                        ch:put(nil)
+                    end
+                end
+                self.process = connect_process
                 return nil, res[3]
             end
 
-            return self:wait_response(sync)
+            return self:wait_response(sync, op)
         end,
         
-        wait_response = function(self, sync)
+        wait_response = function(self, sync, op)
             self.processing[sync] = box.ipc.channel(1)
             local response = self.processing[sync]:get()
+            if response == nil then
+                if op == 65280 then
+                    return false
+                end
+                error("Lost connection to remote tarantool")
+            end
+            if op == 65280 then
+                return true
+            end
+
+            local rop, blen, sync, code, body = box.unpack('iiiia', response)
+            if code ~= 0 then
+                box.raise(code, body)
+            end
             -- TODO: parse
             return response
         end
     }
+
+    remote.process = remote.connect_process
 
     setmetatable(
         remote, {
