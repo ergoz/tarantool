@@ -46,6 +46,27 @@ coio_init(struct ev_io *coio)
 	coio->fd = -1;
 }
 
+static inline void
+coio_fiber_yield(struct ev_io *coio)
+{
+	coio->data = fiber;
+	fiber_yield();
+#ifdef DEBUG
+	coio->data = NULL;
+#endif
+}
+
+static inline bool
+coio_fiber_yield_timeout(struct ev_io *coio, ev_tstamp delay)
+{
+	coio->data = fiber;
+	bool is_timedout = fiber_yield_timeout(delay);
+#ifdef DEBUG
+	coio->data = NULL;
+#endif
+	return is_timedout;
+}
+
 /**
  * Connect to a host.
  */
@@ -74,7 +95,7 @@ coio_connect_timeout(struct ev_io *coio, struct sockaddr_in *addr,
 	 */
 	ev_io_set(coio, coio->fd, EV_WRITE);
 	ev_io_start(coio);
-	bool is_timedout = fiber_yield_timeout(timeout);
+	bool is_timedout = coio_fiber_yield_timeout(coio, timeout);
 	ev_io_stop(coio);
 	fiber_testcancel();
 	if (is_timedout) {
@@ -144,7 +165,6 @@ coio_accept(struct ev_io *coio, struct sockaddr_in *addr,
 {
 	ev_tstamp start, delay;
 	evio_timeout_init(&start, &delay, timeout);
-
 	while (true) {
 		/* Assume that there are waiting clients
 		 * available */
@@ -158,9 +178,11 @@ coio_accept(struct ev_io *coio, struct sockaddr_in *addr,
 			ev_io_set(coio, coio->fd, EV_READ);
 			ev_io_start(coio);
 		}
-		/* Yield control to other fibers until the timeout
-		 * is being reached. */
-		bool is_timedout = fiber_yield_timeout(delay);
+		/*
+		 * Yield control to other fibers until the
+		 * timeout is reached.
+		 */
+		bool is_timedout = coio_fiber_yield_timeout(coio, delay);
 		fiber_testcancel();
 		if (is_timedout) {
 			errno = ETIMEDOUT;
@@ -207,6 +229,7 @@ coio_read_ahead_timeout(struct ev_io *coio, void *buf, size_t sz,
 				errno = 0;
 				return sz - to_read;
 			}
+
 			/* The socket is not ready, yield */
 			if (! ev_is_active(coio)) {
 				ev_io_set(coio, coio->fd, EV_READ);
@@ -216,7 +239,8 @@ coio_read_ahead_timeout(struct ev_io *coio, void *buf, size_t sz,
 			 * Yield control to other fibers until the
 			 * timeout is being reached.
 			 */
-			bool is_timedout = fiber_yield_timeout(delay);
+			bool is_timedout = coio_fiber_yield_timeout(coio,
+								    delay);
 			fiber_testcancel();
 			if (is_timedout) {
 				errno = ETIMEDOUT;
@@ -304,14 +328,14 @@ coio_write_timeout(struct ev_io *coio, const void *buf, size_t sz,
 				ev_io_start(coio);
 			}
 			/* Yield control to other fibers. */
-			fiber_yield();
 			fiber_testcancel();
 			/*
 			 * Yield control to other fibers until the
 			 * timeout is reached or the socket is
 			 * ready.
 			 */
-			bool is_timedout = fiber_yield_timeout(delay);
+			bool is_timedout = coio_fiber_yield_timeout(coio,
+								    delay);
 			fiber_testcancel();
 
 			if (is_timedout) {
@@ -375,7 +399,7 @@ coio_writev(struct ev_io *coio, struct iovec *iov, int iovcnt,
 				ev_io_start(coio);
 			}
 			/* Yield control to other fibers. */
-			fiber_yield();
+			coio_fiber_yield(coio);
 			fiber_testcancel();
 		}
 	} @finally {
@@ -417,7 +441,8 @@ coio_sendto_timeout(struct ev_io *coio, const void *buf, size_t sz, int flags,
 			 * timeout is reached or the socket is
 			 * ready.
 			 */
-			bool is_timedout = fiber_yield_timeout(delay);
+			bool is_timedout = coio_fiber_yield_timeout(coio,
+								    delay);
 			fiber_testcancel();
 			if (is_timedout) {
 				errno = ETIMEDOUT;
@@ -465,7 +490,8 @@ coio_recvfrom_timeout(struct ev_io *coio, void *buf, size_t sz, int flags,
 			 * timeout is reached or the socket is
 			 * ready.
 			 */
-			bool is_timedout = fiber_yield_timeout(delay);
+			bool is_timedout = coio_fiber_yield_timeout(coio,
+								    delay);
 			fiber_testcancel();
 			if (is_timedout) {
 				errno = ETIMEDOUT;
