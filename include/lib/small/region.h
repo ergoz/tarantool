@@ -73,11 +73,9 @@
 
 enum { REGION_NAME_MAX = 30 };
 
-struct slab_cache;
-
 struct region
 {
-	struct slab_cache *slab_cache;
+	struct slab_cache *cache;
 	struct slab_list slabs;
 	char name[REGION_NAME_MAX];
 };
@@ -87,9 +85,9 @@ struct region
  * @sa region_free().
  */
 static inline void
-region_create(struct region *region, struct slab_cache *slab_cache)
+region_create(struct region *region, struct slab_cache *cache)
 {
-	region->slab_cache = slab_cache;
+	region->cache = cache;
 	slab_list_create(&region->slabs);
 	region->name[0] = '\0';
 }
@@ -115,7 +113,7 @@ struct rslab
 static inline size_t
 rslab_sizeof()
 {
-	return slab_align(sizeof(struct rslab), sizeof(intptr_t));
+	return slab_size_align(sizeof(struct rslab), sizeof(intptr_t));
 }
 
 static inline void *

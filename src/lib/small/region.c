@@ -35,7 +35,7 @@ region_alloc_slow(struct region *region, size_t size)
 	size_t slab_min_size = size + rslab_sizeof() - slab_sizeof();
 
 	struct rslab *slab;
-	slab = (struct rslab *) slab_get(region->slab_cache, slab_min_size);
+	slab = (struct rslab *) slab_get(region->cache, slab_min_size);
 	if (slab == NULL)
 		return NULL;
 	slab->used = size;
@@ -52,10 +52,10 @@ region_alloc_slow(struct region *region, size_t size)
 void
 region_free(struct region *region)
 {
-	struct rslab *slab, *tmp;
+	struct slab *slab, *tmp;
 	rlist_foreach_entry_safe(slab, &region->slabs.slabs,
-				 slab.next_in_list, tmp)
-		slab_put(region->slab_cache, &slab->slab);
+				 next_in_list, tmp)
+		slab_put(region->cache, slab);
 
 	slab_list_create(&region->slabs);
 }
@@ -83,7 +83,7 @@ region_truncate(struct region *region, size_t new_size)
 		cut_size -= slab->used;
 		/* Remove the entire slab. */
 		slab_list_del(&region->slabs, &slab->slab, next_in_list);
-		slab_put(region->slab_cache, &slab->slab);
+		slab_put(region->cache, &slab->slab);
 	}
 	assert(cut_size == 0);
 	region->slabs.stats.used = new_size;

@@ -1,5 +1,5 @@
-#ifndef INCLUDES_TARANTOOL_SLAB_CACHE_H
-#define INCLUDES_TARANTOOL_SLAB_CACHE_H
+#ifndef INCLUDES_TARANTOOL_SMALL_SLAB_CACHE_H
+#define INCLUDES_TARANTOOL_SMALL_SLAB_CACHE_H
 /*
  * Redistribution and use in source and binary forms, with or
  * without modification, are permitted provided that the following
@@ -31,6 +31,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <stddef.h>
+#include <assert.h>
 #include "rlist.h"
 
 enum {
@@ -58,21 +59,6 @@ enum {
 };
 
 struct slab {
-	uint32_t magic;
-	uint8_t order;
-	/**
-	 * Only used for buddy slabs. If the buddy of the current
-	 * free slab is also free, both slabs are merged and
-	 * a free slab of the higher order emerges.
-	 */
-	uint8_t in_use;
-	/**
-	 * Allocated size.
-	 * Is different from (SLAB_MIN_SIZE << slab->order)
-	 * when requested size is bigger than SLAB_MAX_SIZE
-	 * (i.e. slab->order is SLAB_CLASS_LAST).
-	 */
-	size_t size;
 	/*
 	 * Next slab in the list of allocated slabs. Unused if
 	 * this slab has a buddy. Sic: if a slab is not allocated
@@ -83,6 +69,23 @@ struct slab {
 	struct rlist next_in_cache;
 	/** Next slab in slab_list->slabs list. */
 	struct rlist next_in_list;
+	/**
+	 * Allocated size.
+	 * Is different from (SLAB_MIN_SIZE << slab->order)
+	 * when requested size is bigger than SLAB_MAX_SIZE
+	 * (i.e. slab->order is SLAB_CLASS_LAST).
+	 */
+	size_t size;
+	/** Slab magic (for sanity checks). */
+	uint32_t magic;
+	/** Base of lb(size) for ordered slabs. */
+	uint8_t order;
+	/**
+	 * Only used for buddy slabs. If the buddy of the current
+	 * free slab is also free, both slabs are merged and
+	 * a free slab of the higher order emerges.
+	 */
+	uint8_t in_use;
 };
 
 /** Allocation statistics. */
@@ -165,7 +168,7 @@ slab_from_ptr(void *ptr, uint8_t order);
 
 /** Align a size. Alignment must be a power of 2 */
 static inline size_t
-slab_align(size_t size, size_t alignment)
+slab_size_align(size_t size, size_t alignment)
 {
 	return (size + alignment - 1) & ~(alignment - 1);
 }
@@ -174,7 +177,7 @@ slab_align(size_t size, size_t alignment)
 static inline size_t
 slab_sizeof()
 {
-	return slab_align(sizeof(struct slab), sizeof(intptr_t));
+	return slab_size_align(sizeof(struct slab), sizeof(intptr_t));
 }
 
 static inline size_t
@@ -186,4 +189,32 @@ slab_size(struct slab *slab)
 void
 slab_cache_check(struct slab_cache *cache);
 
-#endif /* INCLUDES_TARANTOOL_SLAB_CACHE_H */
+/**
+ * Find the nearest power of 2 size capable of containing
+ * a chunk of the given size. Adjust for SLAB_MIN_SIZE and
+ * SLAB_MAX_SIZE.
+ */
+static inline uint8_t
+slab_order(size_t size)
+{
+	assert(size <= UINT32_MAX);
+	if (size <= SLAB_MIN_SIZE)
+		return 0;
+	if (size > SLAB_MAX_SIZE)
+		return SLAB_HUGE;
+
+	return (uint8_t) (CHAR_BIT * sizeof(uint32_t) -
+			  __builtin_clz((uint32_t) size - 1) -
+			  SLAB_MIN_SIZE_LB);
+}
+
+/** Convert slab order to the mmap()ed size. */
+static inline intptr_t
+slab_order_size(uint8_t order)
+{
+	assert(order <= SLAB_ORDER_LAST);
+	return 1 << (order + SLAB_MIN_SIZE_LB);
+}
+
+
+#endif /* INCLUDES_TARANTOOL_SMALL_SLAB_CACHE_H */
