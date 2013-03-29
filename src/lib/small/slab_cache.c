@@ -226,28 +226,10 @@ slab_cache_destroy(struct slab_cache *cache)
 	}
 }
 
-/**
- * Try to find a region of the requested order
- * in the cache. On failure, mmap() a new region,
- * optionally split it into a series of half.
- * Returns a next-power-of-two(size) aligned address
- * for all sizes below SLAB_SIZE_MAX.
- */
 struct slab *
-slab_get(struct slab_cache *cache, size_t size)
+slab_get_order(struct slab_cache *cache, uint8_t order)
 {
-	size += slab_sizeof();
-	uint8_t order = slab_order(size);
-
-	if (order == SLAB_HUGE) {
-		struct slab *slab = (struct slab *) malloc(size);
-		if (slab == NULL)
-			return NULL;
-		slab_create(slab, order, size);
-		slab_list_add(&cache->allocated, slab, next_in_cache);
-		cache->allocated.stats.used += size;
-		return slab;
-	}
+	assert(order <= SLAB_ORDER_LAST);
 	struct slab *slab;
 	/* Search for the first available slab. If a slab
 	 * of a bigger size is found, it can be split.
@@ -289,6 +271,31 @@ slab_get(struct slab_cache *cache, size_t size)
 	slab_set_used(cache, slab);
 	slab_assert(slab);
 	return slab;
+}
+
+/**
+ * Try to find a region of the requested order
+ * in the cache. On failure, mmap() a new region,
+ * optionally split it into a series of half.
+ * Returns a next-power-of-two(size) aligned address
+ * for all sizes below SLAB_SIZE_MAX.
+ */
+struct slab *
+slab_get(struct slab_cache *cache, size_t size)
+{
+	size += slab_sizeof();
+	uint8_t order = slab_order(size);
+
+	if (order == SLAB_HUGE) {
+		struct slab *slab = (struct slab *) malloc(size);
+		if (slab == NULL)
+			return NULL;
+		slab_create(slab, order, size);
+		slab_list_add(&cache->allocated, slab, next_in_cache);
+		cache->allocated.stats.used += size;
+		return slab;
+	}
+	return slab_get_order(cache, order);
 }
 
 /** Return a slab back to the slab cache. */

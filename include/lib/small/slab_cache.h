@@ -160,6 +160,9 @@ slab_cache_destroy(struct slab_cache *cache);
 struct slab *
 slab_get(struct slab_cache *cache, size_t size);
 
+struct slab *
+slab_get_order(struct slab_cache *cache, uint8_t order);
+
 void
 slab_put(struct slab_cache *cache, struct slab *slab);
 
