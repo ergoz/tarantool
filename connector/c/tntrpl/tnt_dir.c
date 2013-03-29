@@ -42,8 +42,8 @@
 #include <connector/c/include/tarantool/tnt.h>
 #include <connector/c/include/tarantool/tnt_dir.h>
 
-void tnt_dir_init(struct tnt_dir *d, enum tnt_dir_type type) {
-	d->type = type;
+void tnt_dir_init(struct tnt_dir *d, enum tnt_dir_type filter) {
+	d->filter = filter;
 	d->path = NULL;
 	d->files = NULL;
 	d->count = 0;
@@ -66,8 +66,9 @@ void tnt_dir_free(struct tnt_dir *d) {
 	}
 }
 
-static int tnt_dir_put(struct tnt_dir *d,
-		       int *top, char *name, uint64_t lsn)
+static int
+tnt_dir_put(struct tnt_dir *d, int *top,
+            char *name, enum tnt_dir_type type, uint64_t lsn)
 {
 	if (d->count == *top) {
 		*top = (*top == 0) ? 128 : *top * 2;
@@ -76,6 +77,7 @@ static int tnt_dir_put(struct tnt_dir *d,
 			return -1;
 	}
 	struct tnt_dir_file *current = &d->files[d->count];
+	current->type = type;
 	current->lsn = lsn;
 	current->name = (char*)tnt_mem_dup(name);
 	if (current->name == NULL)
@@ -90,6 +92,20 @@ static int tnt_dir_cmp(const void *_a, const void *_b) {
 	if (a->lsn == b->lsn)
 		return 0;
 	return (a->lsn > b->lsn) ? 1: -1;
+}
+
+static inline enum tnt_dir_type
+tnt_dir_typeof(char *name) {
+	char *ext = strchr(name, '.');
+	if (ext == NULL)
+		return TNT_DIR_UNKNOWN;
+	if (strcmp(ext, ".xlog") == 0 ||
+	    strcmp(ext, ".xlog.inprogress") == 0)
+		return TNT_DIR_XLOG;
+	else
+	if (strcmp(ext, ".snap") == 0)
+		return TNT_DIR_SNAPSHOT;
+	return TNT_DIR_UNKNOWN;
 }
 
 int tnt_dir_scan(struct tnt_dir *d, char *path) {
@@ -110,27 +126,17 @@ int tnt_dir_scan(struct tnt_dir *d, char *path) {
 		    strcmp(de.d_name, "..") == 0)
 			continue;
 
-		char *ext = strchr(de.d_name, '.');
-		if (ext == NULL)
+		enum tnt_dir_type t = tnt_dir_typeof(de.d_name);
+		if (t == TNT_DIR_UNKNOWN)
+			continue;
+		if (d->filter != TNT_DIR_ANY && d->filter != t)
 			continue;
 
-		switch (d->type) {
-		case TNT_DIR_XLOG:
-			if (strcmp(ext, ".xlog") != 0 && 
-			    strcmp(ext, ".xlog.inprogress") != 0)
-				continue;
-			break;
-		case TNT_DIR_SNAPSHOT:
-			if (strcmp(ext, ".snap") != 0)
-				continue;
-			break;
-		}
-
-		uint64_t lsn = strtoll(de.d_name, &ext, 10);
+		uint64_t lsn = strtoll(de.d_name, NULL, 10);
 		if (lsn == LLONG_MAX || lsn == LLONG_MIN)
 			continue;
 
-		rc = tnt_dir_put(d, &top, de.d_name, lsn);
+		rc = tnt_dir_put(d, &top, de.d_name, t, lsn);
 		if (rc == -1)
 			goto error;
 	}

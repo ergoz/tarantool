@@ -1,5 +1,3 @@
-#ifndef TNT_DIR_H_INCLUDED
-#define TNT_DIR_H_INCLUDED
 
 /*
  * Redistribution and use in source and binary forms, with or
@@ -30,32 +28,46 @@
  * SUCH DAMAGE.
  */
 
-enum tnt_dir_type {
-	TNT_DIR_UNKNOWN,
-	TNT_DIR_XLOG,
-	TNT_DIR_SNAPSHOT,
-	TNT_DIR_ANY
-};
+#include <stdlib.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
-struct tnt_dir_file {
-	enum tnt_dir_type type;
-	uint64_t lsn;
-	char *name;
-};
+#include <cfg/prscfg.h>
+#include <cfg/tarantool_box_cfg.h>
 
-struct tnt_dir {
-	enum tnt_dir_type filter;
-	char *path;
-	struct tnt_dir_file *files;
-	int count;
-};
+#include "options.h"
+#include "config.h"
 
-void tnt_dir_init(struct tnt_dir *d, enum tnt_dir_type filter);
-void tnt_dir_free(struct tnt_dir *d);
+void out_warning(ConfettyError v, char *format, ...) {
+	(void)v;
+	va_list ap;
+	va_start(ap, format);
+	vprintf(format, ap);
+	printf("\n");
+	va_end(ap);
+}
 
-int tnt_dir_scan(struct tnt_dir *d, char *path);
-
-int tnt_dir_match_gt(struct tnt_dir *d, uint64_t *out);
-int tnt_dir_match_inc(struct tnt_dir *d, uint64_t lsn, uint64_t *out);
-
-#endif
+int ts_config_load(struct ts_options *opts)
+{
+	FILE *f = fopen(opts->file_config, "r");
+	if (f == NULL) {
+		printf("failed to open config file: %s\n", opts->file_config);
+		return -1;
+	}
+	int accepted = 0,
+	    skipped = 0,
+	    optional = 0;
+	int rc = parse_cfg_file_tarantool_cfg(&opts->cfg, f, 0,
+			                      &accepted,
+					      &skipped,
+					      &optional);
+	fclose(f);
+	if (rc == -1)
+		return -1;
+	rc = check_cfg_tarantool_cfg(&opts->cfg);
+	if (rc == -1)
+		return -1;
+	return 0;
+}
