@@ -92,7 +92,7 @@ mslab_alloc(struct mempool *pool, struct mslab *slab)
 	assert(slab->nfree);
 	uint32_t idx = __builtin_ffsl(slab->map[slab->ffi]);
 	while (idx == 0) {
-		if (slab->ffi == pool->mapsize) {
+		if (slab->ffi == pool->mapsize - 1) {
 			/*
 			 * mslab_alloc() shouldn't be called
 			 * on a full slab.
@@ -101,9 +101,15 @@ mslab_alloc(struct mempool *pool, struct mslab *slab)
 			return NULL;
 		}
 		slab->ffi++;
-		idx = __builtin_ffs(slab->map[slab->ffi]); }
+		idx = __builtin_ffsl(slab->map[slab->ffi]);
+	}
+	/*
+	 * find-first-set returns bit index starting from 1,
+	 * or 0 if no bit is set. Rebase the index to offset 0.
+	 */
+	idx--;
 	/* Mark the position as occupied. */
-	slab->map[slab->ffi] ^= ((mbitmap_t) 1) << (idx - 1);
+	slab->map[slab->ffi] ^= ((mbitmap_t) 1) << idx;
 	/* If the slab is full, remove it from the rb tree. */
 	if (--slab->nfree == 0)
 		mslab_tree_remove(&pool->free_slabs, slab);
@@ -119,7 +125,7 @@ mslab_free(struct mempool *pool, struct mslab *slab, void *ptr)
 	idx /= MEMPOOL_MAP_BIT;
 	slab->map[idx] |= ((mbitmap_t) 1) << bit_no;
 	slab->nfree++;
-	if (idx > slab->ffi)
+	if (idx < slab->ffi)
 		slab->ffi = idx;
 	if (slab->nfree == 1) {
 		/**
@@ -129,10 +135,15 @@ mslab_free(struct mempool *pool, struct mslab *slab, void *ptr)
 		mslab_tree_insert(&pool->free_slabs, slab);
 	} else if (slab->nfree == pool->objcount) {
 		/** Free the slab. */
+		mslab_tree_remove(&pool->free_slabs, slab);
 		if (pool->spare > slab) {
+			slab_list_del(&pool->slabs, &pool->spare->slab,
+				      next_in_list);
 			slab_put(pool->cache, &pool->spare->slab);
 			pool->spare = slab;
 		 } else if (pool->spare) {
+			 slab_list_del(&pool->slabs, &slab->slab,
+				       next_in_list);
 			 slab_put(pool->cache, &slab->slab);
 		 } else {
 			 pool->spare = slab;
@@ -183,7 +194,7 @@ mempool_create(struct mempool *pool, struct slab_cache *cache,
 	/* The wasted memory should be under objsize */
 	assert(slab_size - objcount * objsize -
 	       mapsize * MEMPOOL_MAP_SIZEOF < objsize ||
-	       mapsize * MEMPOOL_MAP_BIT == objsize);
+	       mapsize * MEMPOOL_MAP_BIT == objcount);
 	pool->objcount = objcount;
 	pool->mapsize = mapsize;
 }
@@ -208,7 +219,8 @@ mempool_alloc_nothrow(struct mempool *pool)
 			if (slab == NULL)
 				return NULL;
 			mslab_create(slab, pool->objcount, pool->mapsize);
-			slab_list_add(&pool->slabs, &slab->slab, next_in_list);
+			slab_list_add(&pool->slabs, &slab->slab,
+				      next_in_list);
 		} else {
 			slab = pool->spare;
 			pool->spare = NULL;

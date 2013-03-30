@@ -174,4 +174,40 @@ mempool_alloc_nothrow(struct mempool *pool);
 void
 mempool_free(struct mempool *pool, void *ptr);
 
+/** How much memory is used by this pool. */
+static inline size_t
+mempool_used(struct mempool *pool)
+{
+	return pool->slabs.stats.used;
+}
+
+
+/** How much memory is held by this pool. */
+static inline size_t
+mempool_total(struct mempool *pool)
+{
+	return pool->slabs.stats.total;
+}
+
+#if defined(__OBJC__)
+#include "exception.h"
+
+static inline void *
+mempool_alloc(struct mempool *pool)
+{
+
+	void *ptr = mempool_alloc_nothrow(pool);
+	if (ptr == NULL)
+		tnt_raise(LoggedError, :ER_MEMORY_ISSUE,
+			  pool->objsize, "mempool", "new slab");
+	return ptr;
+}
+
+static inline void *
+mempool_calloc(struct mempool *pool)
+{
+	return memset(mempool_alloc(pool), 0, pool->objsize);
+}
+#endif /* __OBJC__ */
+
 #endif /* INCLUDES_TARANTOOL_SMALL_MEMPOOL_H */

@@ -183,6 +183,14 @@ region_used(struct region *region)
 	return region->slabs.stats.used;
 }
 
+
+/** How much memory is held by this region. */
+static inline size_t
+region_total(struct region *region)
+{
+	return region->slabs.stats.total;
+}
+
 static inline void
 region_free_after(struct region *region, size_t after)
 {
@@ -222,7 +230,7 @@ region_alloc(struct region *region, size_t size)
 static inline void *
 region_calloc(struct region *region, size_t size)
 {
-	return memset(region_alloc(region, size), 0, size);;
+	return memset(region_alloc(region, size), 0, size);
 }
 #endif /* __OBJC__ */
 
