@@ -1,0 +1,16 @@
+# encoding: tarantool
+# vim: set ft=python :
+
+
+exec admin "lua iotest()"
+exec admin "lua iotest()"
+exec admin "lua box.fiber.sleep(.5)"
+
+
+
+#exec admin "lua remote = box.remote.new('127.0.0.1', box.cfg.primary_port, '0.5')"
+#exec admin "lua type(remote)"
+#exec admin "lua remote.s"
+#exec admin "lua print( remote:ping() ) "
+#exec admin "lua print( remote:ping() ) "
+#exec admin "lua print( remote:ping() ) "

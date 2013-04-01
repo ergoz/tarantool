@@ -68,6 +68,11 @@ box.remote.lib = {
                      key_part_count, ...))
     end,
 
+
+    ping = function(self)
+        return self:process(65280, '')
+    end,
+
     call    = function(self, proc_name, ...)
         local count = select('#', ...)
         return self:process(22,
@@ -134,22 +139,53 @@ box.remote.new = function(host, port, timeout)
             last_sync = 0,
             next_sync = function(self)
                 while true do
+                    self.last_sync = self.last_sync + 1
                     if self[ self.last_sync ] == nil then
                         return self.last_sync
                     end
 
-                    self.last_sync = self.last_sync + 1
                     if self.last_sync > 0x7FFFFFFF then
                         self.last_sync = 0
                     end
                 end
             end
         },
-        connect = {
-            host    = host,
-            port    = port,
-            timeout = timeout
-        },
+
+
+        read_fiber = function(self)
+            print('fiber was started')
+            box.fiber.detach()
+            print('fiber was detached ', self.s)
+            while true do
+                if self.s == nil then
+                    box.fiber.sleep(.1)
+                else
+                    -- TODO: error handling
+
+                    print("trying to read header")
+                    local res = { self.s:recv(12) }
+                    local op, blen, sync = box.unpack('iii', res[1])
+                    local header = res[1]
+                    
+                    print("op=", op, ", blen=", blen, ", sync=", sync)
+
+                    local body = ''
+                    if blen > 0 then
+                        res = { self.s:recv(blen) }
+                        body = res[1]
+                    end
+                    if self.processing[sync] ~= nil then
+                        local ch = self.processing[sync]
+
+                        print("respose was read: ", string.len(header .. body), " bytes")
+                        ch:put(header .. body, 0.1)
+                    else
+                        print("Unexpected response ", sync)
+                    end
+                end
+            end
+        end,
+
 
         connect_process = function(self, ...)
             if self.s == nil then
@@ -158,51 +194,25 @@ box.remote.new = function(host, port, timeout)
             if self.s == nil then
                 return nil, "Can not create socket"
             end
-            if self.connect.timeout == nil then
-                local res = {
-                    self.s:connect(
-                        self.connect.host,
-                        self.connect.port,
-                        self.connect.timeout)
-                }
-                if res[1] == nil then
-                    return nil, res[4]
-                end
+            local res = { self.s:connect( unpack(self.connect) ) }
+            if res[1] == nil then
+                return nil, res[4]
             end
 
             self.process = self.connected_process
+            self.o_read_fiber =
+                box.fiber.create( function() self.read_fiber(self) end )
+            box.fiber.resume(self.o_read_fiber)
+            print("connected to remote tarantool")
 
-            self.read_fiber = box.fiber.create(
-                function()
-                    box.fiber.detach()
-                    while true do
-                        -- TODO: error handling
-                        local header, status, errno, errstr = self.s:recv(12)
-                        local op, blen, sync = box.unpack('iii')
-
-                        local body = ''
-                        if blen > 0 then
-                            body, status, errno, errstr = self.s:recv(blen)
-                        end
-                        if self.processing[sync] ~= nil then
-                            local ch = self.processing[sync]
-                            self.processing[sync] = nil
-                            ch:put(header .. body)
-                        else
-                            print("Unexpected response ", sync)
-                        end
-                    end
-                end
-            )
-
-            box.fiber.resume(self.read_fiber)
-
-            return self:process(...)
+            return self:connected_process(...)
         end,
 
         connected_process = function(self, op, request)
             local sync = self.processing:next_sync()
+            self.processing[sync] = box.ipc.channel(1)
             request = box.pack('iiia', op, string.len(request), sync, request)
+
 
             local res = { self.s:send(request) }
             if res[3] ~= nil then
@@ -217,12 +227,15 @@ box.remote.new = function(host, port, timeout)
                 return nil, res[3]
             end
 
+            print(string.len(request), ' bytes sent, sync=', sync, ' ', res[1])
+
             return self:wait_response(sync, op)
         end,
         
         wait_response = function(self, sync, op)
-            self.processing[sync] = box.ipc.channel(1)
-            local response = self.processing[sync]:get()
+            print("wait response for sync=", sync)
+            local response = self.processing[sync]:get(1)
+            self.processing[sync] = nil
             if response == nil then
                 if op == 65280 then
                     return false
@@ -233,14 +246,20 @@ box.remote.new = function(host, port, timeout)
                 return true
             end
 
-            local rop, blen, sync, code, body = box.unpack('iiiia', response)
-            if code ~= 0 then
-                box.raise(code, body)
-            end
+--             local rop, blen, sync, code, body = box.unpack('iiiia', response)
+--             if code ~= 0 then
+--                 box.raise(code, body)
+--             end
             -- TODO: parse
             return response
-        end
+        end,
+
     }
+    
+    remote.connect = { host, port }
+    if timeout ~= nil then
+        table.insert(remote.connect, tonumber(timeout))
+    end
 
     remote.process = remote.connect_process
 
@@ -255,6 +274,8 @@ box.remote.new = function(host, port, timeout)
             end
         }
     )
+
+    return remote
 end
 
 
@@ -512,6 +533,40 @@ end
 -- User can redefine the hook
 function box.on_reload_configuration()
 end
+
+
+local s
+local syncno = 0
+
+function iostart()
+    if s ~= nil then
+        return
+    end
+
+    s = box.socket.tcp()
+    s:connect('127.0.0.1', box.cfg.primary_port)
+    
+    box.fiber.resume( box.fiber.create(
+        function()
+            box.fiber.detach()
+            while true do
+                print("reading chunk")
+                s:recv(12)
+                print("chunk was read")
+            end
+        end
+    ))
+end
+
+function iotest()
+    iostart()
+
+    syncno = syncno + 1
+    return s:send(box.pack('iii', 65280, 0, syncno))
+
+end
+
+
 
 require("bit")
 
