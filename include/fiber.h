@@ -95,7 +95,9 @@ extern __thread struct fiber *fiber;
 
 void fiber_init(void);
 void fiber_free(void);
-struct fiber *fiber_new(const char *name, void (*f) (va_list));
+
+typedef void(*fiber_proc)(va_list);
+struct fiber *fiber_new(const char *name, fiber_proc f);
 void fiber_set_name(struct fiber *fiber, const char *name);
 int wait_for_child(pid_t pid);
 
