@@ -1650,6 +1650,7 @@ lbox_unpack(struct lua_State *L)
 			u32buf = pick_varint32(&s, end);
 			lua_pushnumber(L, u32buf);
 			break;
+
 		case 'a':
 		case 'A':
 			lua_pushlstring(L, s, end - s);
@@ -1700,6 +1701,63 @@ lbox_unpack(struct lua_State *L)
 			lua_pushnumber(L, u32buf);
 			s += 5;
 			break;
+
+		case 'R': {
+			if (end - s < 4)
+				goto WRONG_RESPONSE;
+			u32 count = *(u32 *)s;
+			s += 4;
+
+			if (s == end) {
+				lua_pushnumber(L, count);
+				break;
+			}
+			while(count--) {
+				if (end - s < 4)
+					goto WRONG_RESPONSE;
+				u32 size = *(u32 *)s;
+				s += 4;
+
+				if (end - s < size)
+					goto WRONG_RESPONSE;
+
+				if (end - s < 4)
+					goto WRONG_RESPONSE;
+				u32 c = *(u32 *)s;
+				s += 4;
+
+
+				/* check input tuple */
+				typeof(s) tdata = s;
+				for (u32 j = 0; j < c; j++) {
+					u32 fsize = pick_varint32(&tdata, end);
+					if (end - tdata < fsize)
+						goto WRONG_RESPONSE;
+					tdata += fsize;
+				}
+				if (tdata != s + size)
+					goto WRONG_RESPONSE;
+
+
+				struct tuple * t = tuple_alloc(size);
+				t->field_count = c;
+				memcpy(t->data, s, size);
+
+				s += size;
+				lbox_pushtuple(L, t);
+
+				/* latest increment outside switch */
+				if (count)
+					i++;
+
+			}
+
+			break;
+			WRONG_RESPONSE:
+				luaL_error(L, "Can't parse response body");
+
+		}
+
 		default:
 			luaL_error(L, "box.unpack: unsupported "
 				   "format specifier '%c'", *f);
@@ -1707,8 +1765,6 @@ lbox_unpack(struct lua_State *L)
 		i++;
 		f++;
 	}
-
-	assert(s <= end);
 
 	if (s != end) {
 		luaL_error(L, "box.unpack('%s'): too many bytes: "

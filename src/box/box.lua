@@ -84,14 +84,48 @@ box.remote.lib = {
                 ...))
     end,
 
-    select_range = function(self, ...)
-        return self:call('box.select_range', ...)
+    select_range = function(self, sno, ino, limit, ...)
+        return self:call(
+            'box.select_range',
+            tostring(sno),
+            tostring(ino),
+            tostring(limit),
+            ...
+        )
     end,
 
     select_reverse_range = function(self, sno, ino, limit, ...)
-        return self:call('box.select_reverse_range', ...)
+        return self:call(
+            'box.select_reverse_range',
+            tostring(sno),
+            tostring(ino),
+            tostring(limit),
+            ...
+        )
     end,
 
+
+    timeout = function(self, timeout)
+
+        local wrapper = {}
+
+        setmetatable(wrapper, {
+            __index = function(wrp, name, ...)
+                local foo = self[name]
+                if foo ~= nil then
+                    return
+                        function(wr, ...)
+                            self.timeout_request = timeout
+                            return foo(self, ...)
+                        end
+                end
+                
+                error(string.format('Can not find "remote:%s" function', name))
+            end
+        });
+
+        return wrapper
+    end,
 
 }
 
@@ -103,11 +137,13 @@ box.remote.localhost = {
     end,
     
     select_range = function(self, sno, ino, limit, ...)
-        return box.space[tonumber(sno)].index[tonumber(ino)]:select_range(tonumber(limit), ...)
+        return box.space[tonumber(sno)].index[tonumber(ino)]
+            :select_range(tonumber(limit), ...)
     end,
 
     select_reverse_range = function(self, sno, ino, limit, ...)
-        return box.space[tonumber(sno)].index[tonumber(ino)]:select_reverse_range(tonumber(limit), ...)
+        return box.space[tonumber(sno)].index[tonumber(ino)]
+            :select_reverse_range(tonumber(limit), ...)
     end,
 
     call = function(self, proc_name, ...)
@@ -126,7 +162,12 @@ box.remote.localhost = {
 
     ping = function(self)
         return true
-    end
+    end,
+    
+    -- local tarantool doesn't provide timeouts
+    timeout = function(self, timeout)
+        return self
+    end,
 }
 
 setmetatable(box.remote.localhost, { __index = box.remote.lib })
@@ -153,9 +194,7 @@ box.remote.new = function(host, port, timeout)
 
 
         read_fiber = function(self)
-            print('fiber was started')
             box.fiber.detach()
-            print('fiber was detached ', self.s)
             while true do
                 if self.s == nil then
                     box.fiber.sleep(.1)
@@ -176,9 +215,8 @@ box.remote.new = function(host, port, timeout)
                     end
                     if self.processing[sync] ~= nil then
                         local ch = self.processing[sync]
-
-                        print("respose was read: ", string.len(header .. body), " bytes")
-                        ch:put(header .. body, 0.1)
+                        print(string.format('resp length: %d', string.len(header .. body)))
+                        ch:put(header .. body, 0)
                     else
                         print("Unexpected response ", sync)
                     end
@@ -203,12 +241,13 @@ box.remote.new = function(host, port, timeout)
             self.o_read_fiber =
                 box.fiber.create( function() self.read_fiber(self) end )
             box.fiber.resume(self.o_read_fiber)
-            print("connected to remote tarantool")
 
             return self:connected_process(...)
         end,
 
         connected_process = function(self, op, request)
+            local timeout = self.timeout_request
+            self.timeout_request = nil
             local sync = self.processing:next_sync()
             self.processing[sync] = box.ipc.channel(1)
             request = box.pack('iiia', op, string.len(request), sync, request)
@@ -216,42 +255,52 @@ box.remote.new = function(host, port, timeout)
 
             local res = { self.s:send(request) }
             if res[3] ~= nil then
+                print(res[3])
                 -- all socket errors are fatal
                 for sync, ch in pairs(self.processing) do
                     if type(sync) == 'number' then
-                        self.processing[sync] = nil
-                        ch:put(nil)
+                        ch:put(false, 0)
                     end
                 end
                 self.process = connect_process
                 return nil, res[3]
             end
 
-            print(string.len(request), ' bytes sent, sync=', sync, ' ', res[1])
-
+            self.timeout_request = timeout
             return self:wait_response(sync, op)
         end,
         
         wait_response = function(self, sync, op)
-            print("wait response for sync=", sync)
-            local response = self.processing[sync]:get(1)
+            local response;
+            if self.timeout_request ~= nil then
+                response = self.processing[sync]
+                    :get(tonumber(self.timeout_request))
+            else
+                response = self.processing[sync]:get()
+            end
             self.processing[sync] = nil
-            if response == nil then
+
+            if response == false then
                 if op == 65280 then
                     return false
                 end
                 error("Lost connection to remote tarantool")
             end
+
+            if response == nil then
+                error("request timeout reached")
+            end
+
             if op == 65280 then
                 return true
             end
 
---             local rop, blen, sync, code, body = box.unpack('iiiia', response)
---             if code ~= 0 then
---                 box.raise(code, body)
---             end
-            -- TODO: parse
-            return response
+            local rop, blen, sync, code, body = box.unpack('iiiia', response)
+            if code ~= 0 then
+                box.raise(code, body)
+            end
+
+            return box.unpack('R', body)
         end,
 
     }
@@ -550,9 +599,7 @@ function iostart()
         function()
             box.fiber.detach()
             while true do
-                print("reading chunk")
                 s:recv(12)
-                print("chunk was read")
             end
         end
     ))
