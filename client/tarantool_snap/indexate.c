@@ -20,7 +20,11 @@
 #include "options.h"
 #include "space.h"
 #include "sha1.h"
+#include "ref.h"
+#include "ts.h"
 #include "indexate.h"
+
+extern struct ts tss;
 
 inline uint32_t
 search_hash(const struct ts_key *k, struct ts_space *s)
@@ -49,12 +53,13 @@ search_equal(const struct ts_key *a,
 }
 
 static int
-snapshot_process_row(struct ts_spaces *s, struct tnt_iter_storage *is,
+snapshot_process_row(struct ts_spaces *s, int fileid, int offset,
+                     struct tnt_iter_storage *is,
                      struct tnt_stream_snapshot *ss)
 {
 	struct ts_space *space =
 		ts_space_match(s, ss->log.current.row_snap.space);
-	struct ts_key *k = ts_space_keyalloc(space, &is->t);
+	struct ts_key *k = ts_space_keyalloc(space, &is->t, fileid, offset);
 	if (k == NULL) {
 		printf("failed to create key\n");
 		return -1;
@@ -74,11 +79,15 @@ snapshot_process_row(struct ts_spaces *s, struct tnt_iter_storage *is,
 }
 
 static int
-snapshot_process(struct ts_spaces *s, char *dir, uint64_t lsn)
+snapshot_process(void)
 {
 	char path[1024];
-	snprintf(path, sizeof(path), "%s/%020llu.snap", dir,
-		 (unsigned long long) lsn);
+	snprintf(path, sizeof(path), "%s/%020llu.snap", tss.opts.cfg.snap_dir,
+	         (unsigned long long) tss.last_snap_lsn);
+
+	int fileid = ts_reftable_add(&tss.rt, path, 1);
+	if (fileid == -1)
+		return -1;
 
 	struct tnt_stream st;
 	tnt_snapshot(&st);
@@ -95,12 +104,12 @@ snapshot_process(struct ts_spaces *s, char *dir, uint64_t lsn)
 		struct tnt_iter_storage *is = TNT_ISTORAGE(&i);
 		struct tnt_stream_snapshot *ss =
 			TNT_SSNAPSHOT_CAST(TNT_IREQUEST_STREAM(&i));
-		rc = snapshot_process_row(s, is, ss);
+		rc = snapshot_process_row(&tss.s, fileid, ss->log.current_offset, is, ss);
 		if (rc == -1)
 			goto done;
 		if (count % 10000 == 0) {
 			printf("(snapshot) %020llu.snap %.3fM processed\r",
-			       (unsigned long long) lsn,
+			       (unsigned long long) tss.last_snap_lsn,
 			       (float)count / 1000000);
 			fflush(stdout);
 		}
@@ -119,29 +128,28 @@ done:
 }
 
 static inline int
-snapdir_process(struct ts_options *opts, struct ts_spaces *s,
-               uint64_t *last_snap_lsn)
+snapdir_process(void)
 {
 	/* open snapshot directory */
 	struct tnt_dir snap_dir;
 	tnt_dir_init(&snap_dir, TNT_DIR_SNAPSHOT);
 
-	int rc = tnt_dir_scan(&snap_dir, opts->cfg.snap_dir);
+	int rc = tnt_dir_scan(&snap_dir, tss.opts.cfg.snap_dir);
 	if (rc == -1) {
 		printf("failed to open snapshot directory\n");
 		goto error;
 	}
 
 	/* find newest snapshot lsn */
-	rc = tnt_dir_match_gt(&snap_dir, last_snap_lsn);
+	rc = tnt_dir_match_gt(&snap_dir, &tss.last_snap_lsn);
 	if (rc == -1) {
 		printf("failed to match greatest snapshot lsn\n");
 		goto error;
 	}
-	printf("last snapshot lsn: %"PRIu64"\n", *last_snap_lsn);
+	printf("last snapshot lsn: %"PRIu64"\n", tss.last_snap_lsn);
 
 	/* process snapshot */
-	rc = snapshot_process(s, opts->cfg.snap_dir, *last_snap_lsn);
+	rc = snapshot_process();
 	if (rc == -1)
 		goto error;
 	return 0;
@@ -151,7 +159,7 @@ error:
 }
 
 static int
-xlog_process_row(struct ts_spaces *s, struct tnt_request *r)
+xlog_process_row(struct ts_spaces *s, int fileid, int offset, struct tnt_request *r)
 {
 	/* validate operation */
 	uint32_t ns = 0;
@@ -182,7 +190,7 @@ xlog_process_row(struct ts_spaces *s, struct tnt_request *r)
 	}
 
 	/* create key */
-	struct ts_key *k = ts_space_keyalloc(space, t);
+	struct ts_key *k = ts_space_keyalloc(space, t, fileid, offset);
 	if (k == NULL) {
 		printf("failed to create key\n");
 		return -1;
@@ -221,6 +229,10 @@ xlog_process(struct ts_spaces *s, char *wal_dir, uint64_t file_lsn,
 	snprintf(path, sizeof(path), "%s/%020llu.xlog", wal_dir,
 		 (unsigned long long) file_lsn);
 
+	int fileid = ts_reftable_add(&tss.rt, path, 0);
+	if (fileid == -1)
+		return -1;
+
 	struct tnt_stream st;
 	tnt_xlog(&st);
 	if (tnt_xlog_open(&st, path) == -1) {
@@ -241,7 +253,7 @@ xlog_process(struct ts_spaces *s, char *wal_dir, uint64_t file_lsn,
 			*last = xs->log.current.hdr.lsn;
 		if (xs->log.current.hdr.lsn <= start)
 			continue;
-		rc = xlog_process_row(s, r);
+		rc = xlog_process_row(s, fileid, xs->log.current_offset, r);
 		if (rc == -1)
 			goto done;
 		if (count % 10000 == 0) {
@@ -265,20 +277,18 @@ done:
 }
 
 static int
-waldir_processof(struct ts_spaces *s, struct tnt_dir *wal_dir,
-                 uint64_t snap_lsn,
-                 uint64_t *last, int i)
+waldir_processof(struct ts_spaces *s, struct tnt_dir *wal_dir, int i)
 {
 	int rc;
 	if (i < wal_dir->count) {
 		rc = xlog_process(s, wal_dir->path, wal_dir->files[i].lsn,
-		                  snap_lsn, last);
+		                  tss.last_snap_lsn, &tss.last_xlog_lsn);
 		if (rc == -1)
 			return -1;
 	}
 	for (i++; i < wal_dir->count; i++) {
 		rc = xlog_process(s, wal_dir->path, wal_dir->files[i].lsn,
-		                  0, last);
+		                  0, &tss.last_xlog_lsn);
 		if (rc == -1)
 			return -1;
 	}
@@ -286,14 +296,13 @@ waldir_processof(struct ts_spaces *s, struct tnt_dir *wal_dir,
 }
 
 static int
-waldir_process(struct ts_options *opts, struct ts_spaces *s,
-               uint64_t last_snap_lsn, uint64_t *last_xlog_lsn)
+waldir_process(void)
 {
 	/* get latest existing lsn after snapshot */
 	struct tnt_dir wal_dir;
 	tnt_dir_init(&wal_dir, TNT_DIR_XLOG);
 
-	int rc = tnt_dir_scan(&wal_dir, opts->cfg.wal_dir);
+	int rc = tnt_dir_scan(&wal_dir, tss.opts.cfg.wal_dir);
 	if (rc == -1) {
 		printf("failed to open wal directory\n");
 		tnt_dir_free(&wal_dir);
@@ -301,8 +310,8 @@ waldir_process(struct ts_options *opts, struct ts_spaces *s,
 	}
 
 	/* match xlog file containling latest snapshot lsn record */
-	if (last_snap_lsn == 1) {
-		rc = waldir_processof(s, &wal_dir, last_snap_lsn, last_xlog_lsn, 0);
+	if (tss.last_snap_lsn == 1) {
+		rc = waldir_processof(&tss.s, &wal_dir, 0);
 		if (rc == -1) {
 			tnt_dir_free(&wal_dir);
 			return -1;
@@ -310,7 +319,7 @@ waldir_process(struct ts_options *opts, struct ts_spaces *s,
 		goto done;
 	}
 	uint64_t xlog_inc = 0;
-	rc = tnt_dir_match_inc(&wal_dir, last_snap_lsn, &xlog_inc);
+	rc = tnt_dir_match_inc(&wal_dir, tss.last_snap_lsn, &xlog_inc);
 	if (rc == -1) {
 		printf("failed to match xlog with snapshot lsn\n");
 		tnt_dir_free(&wal_dir);
@@ -323,7 +332,7 @@ waldir_process(struct ts_options *opts, struct ts_spaces *s,
 	while (i < wal_dir.count && wal_dir.files[i].lsn != xlog_inc)
 		i++;
 
-	rc = waldir_processof(s, &wal_dir, last_snap_lsn, last_xlog_lsn, i);
+	rc = waldir_processof(&tss.s, &wal_dir, i);
 	if (rc == -1) {
 		tnt_dir_free(&wal_dir);
 		return -1;
@@ -334,15 +343,12 @@ done:
 }
 
 int
-ts_indexate(struct ts_options *opts, struct ts_spaces *s)
+ts_indexate(void)
 {
-	uint64_t last_snap_lsn = 0;
-	uint64_t last_xlog_lsn = 0;
-
-	int rc = snapdir_process(opts, s, &last_snap_lsn);
+	int rc = snapdir_process();
 	if (rc == -1)
 		return -1;
-	rc = waldir_process(opts, s, last_snap_lsn, &last_xlog_lsn);
+	rc = waldir_process();
 	if (rc == -1)
 		return -1;
 	return 0;

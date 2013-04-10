@@ -87,6 +87,9 @@ tnt_log_eof(struct tnt_log *l, char *data) {
 
 static int tnt_log_read(struct tnt_log *l, char **buf, uint32_t *size)
 {
+	/* current record offset (before marker) */
+	l->current_offset = ftello(l->fd);
+
 	/* reading marker */
 	char *data = NULL;
 	uint32_t marker = 0;
@@ -272,7 +275,14 @@ tnt_log_open(struct tnt_log *l, char *file, enum tnt_log_type type)
 	}
 	/* getting current offset */
 	l->offset = ftello(l->fd);
+	l->current_offset = 0;
 	return 0;
+}
+
+int tnt_log_seek(struct tnt_log *l, off_t offset)
+{
+	l->offset = offset;
+	return fseeko(l->fd, offset, SEEK_SET);
 }
 
 void tnt_log_close(struct tnt_log *l) {

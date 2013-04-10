@@ -220,14 +220,15 @@ int ts_space_fill(struct ts_spaces *s, struct ts_options *opts)
 	return 0;
 }
 
-struct ts_key*
-ts_space_keyalloc_sha(struct ts_space *s, struct tnt_tuple *t)
+static inline struct ts_key*
+ts_space_keyalloc_sha(struct ts_space *s, struct tnt_tuple *t, int fileid, int offset)
 {
 	struct ts_key *k = malloc(sizeof(struct ts_key) + 20);
 	if (k == NULL)
 		return NULL;
-	k->file = 0;
-	k->offset = 0;
+	k->file = fileid;
+	k->offset = offset;
+
 	SHA1_CTX ctx;
 	SHA1Init(&ctx);
 	int i = 0;
@@ -253,14 +254,14 @@ ts_space_keyalloc_sha(struct ts_space *s, struct tnt_tuple *t)
 	return k;
 }
 
-struct ts_key*
-ts_space_keyalloc_sparse(struct ts_space *s, struct tnt_tuple *t)
+static inline struct ts_key*
+ts_space_keyalloc_sparse(struct ts_space *s, struct tnt_tuple *t, int fileid, int offset)
 {
 	struct ts_key *k = malloc(sizeof(struct ts_key) + s->key_size);
 	if (k == NULL)
 		return NULL;
-	k->file = 0;
-	k->offset = 0;
+	k->file = fileid;
+	k->offset = offset;
 
 	int off = 0;
 	int i = 0;
@@ -287,13 +288,13 @@ ts_space_keyalloc_sparse(struct ts_space *s, struct tnt_tuple *t)
 }
 
 struct ts_key*
-ts_space_keyalloc(struct ts_space *s, struct tnt_tuple *t)
+ts_space_keyalloc(struct ts_space *s, struct tnt_tuple *t, int fileid, int offset)
 {
 	switch (s->c) {
 	case TS_SPACE_COMPACT_CHECKSUM:
-		return ts_space_keyalloc_sha(s, t);
+		return ts_space_keyalloc_sha(s, t, fileid, offset);
 	case TS_SPACE_COMPACT_SPARSE:
-		return ts_space_keyalloc_sparse(s, t);
+		return ts_space_keyalloc_sparse(s, t, fileid, offset);
 	}
 	return NULL;
 }

@@ -1,7 +1,8 @@
 project(tnt_snap)
 
 set (util_snap "tarantool_snap")
-set (util_snap_sources sha1.c main.c config.c space.c options.c indexate.c)
+set (util_snap_sources sha1.c main.c config.c space.c options.c indexate.c ref.c snapshot.c
+                       ${CMAKE_SOURCE_DIR}/third_party/crc32.c)
 set (util_snap_libs tntrpl tntnet tnt gopt)
 
 set_source_files_properties(${CMAKE_SOURCE_DIR}/cfg/tarantool_box_cfg.c

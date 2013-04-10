@@ -46,6 +46,7 @@ struct ts_space *ts_space_match(struct ts_spaces *s, uint32_t id);
 int ts_space_fill(struct ts_spaces *s, struct ts_options *opts);
 
 struct ts_key*
-ts_space_keyalloc(struct ts_space *s, struct tnt_tuple *t);
+ts_space_keyalloc(struct ts_space *s, struct tnt_tuple *t, int fileid,
+                  int offset);
 
 #endif

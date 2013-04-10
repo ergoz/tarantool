@@ -1,6 +1,6 @@
-#ifndef TS_INDEXATE_H_
-#define TS_INDEXATE_H_
+#ifndef TS_INDEXATE_H_INCLUDED
+#define TS_INDEXATE_H_INCLUDED
 
-int ts_indexate(struct ts_options *opts, struct ts_spaces *s);
+int ts_indexate(void);
 
 #endif

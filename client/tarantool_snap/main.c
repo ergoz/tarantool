@@ -45,55 +45,81 @@
 #include "options.h"
 #include "config.h"
 #include "space.h"
+#include "ref.h"
+#include "ts.h"
 #include "indexate.h"
+#include "snapshot.h"
+
+struct ts tss;
+
+static int
+ts_init(void)
+{
+	int rc = ts_reftable_init(&tss.rt);
+	if (rc == -1)
+		return -1;
+	ts_options_init(&tss.opts);
+	memset(&tss.s, 0, sizeof(tss.s));
+	tss.last_snap_lsn = 0;
+	tss.last_xlog_lsn = 0;
+	return 0;
+}
+
+static void
+ts_free(void)
+{
+	ts_options_free(&tss.opts);
+	ts_space_free(&tss.s);
+	ts_reftable_free(&tss.rt);
+}
 
 int main(int argc, char *argv[])
 {
-	struct ts_options opts;
-	struct ts_spaces s;
-
-	ts_options_init(&opts);
-	memset(&s, 0, sizeof(s));
+	int rc = ts_init();
+	if (rc == -1)
+		return 1;
 
 	/* parse arguments */
-	switch (ts_options_process(&opts, argc, argv)) {
+	switch (ts_options_process(&tss.opts, argc, argv)) {
 	case TS_MODE_USAGE:
-		ts_options_free(&opts);
+		ts_options_free(&tss.opts);
 		return ts_options_usage();
 	case TS_MODE_VERSION:
-		ts_options_free(&opts);
+		ts_options_free(&tss.opts);
 		return 0;
 	case TS_MODE_CREATE:
 		break;
 	}
 
 	/* load configuration file */
-	int rc = ts_config_load(&opts);
+	rc = ts_config_load(&tss.opts);
 	if (rc == -1)
 		goto done;
 
 	/* create spaces */
-	rc = ts_space_init(&s);
+	rc = ts_space_init(&tss.s);
 	if (rc == -1)
 		goto done;
-	rc = ts_space_fill(&s, &opts);
+	rc = ts_space_fill(&tss.s, &tss.opts);
 	if (rc == -1)
 		goto done;
 
-	printf("work_dir: %s\n", opts.cfg.work_dir);
-	printf("snap_dir: %s\n", opts.cfg.snap_dir);
-	printf("wal_dir:  %s\n", opts.cfg.wal_dir);
-	printf("spaces:   %d\n", mh_size(s.t));
+	printf("work_dir: %s\n", tss.opts.cfg.work_dir);
+	printf("snap_dir: %s\n", tss.opts.cfg.snap_dir);
+	printf("wal_dir:  %s\n", tss.opts.cfg.wal_dir);
+	printf("spaces:   %d\n", mh_size(tss.s.t));
 
 	/* indexate snapshot and xlog data */
-	rc = ts_indexate(&opts, &s);
+	rc = ts_indexate();
 	if (rc == -1)
 		goto done;
-
+	/* write snapshot */
+	rc = ts_snapshot_create();
+	if (rc == -1)
+		goto done;
 	printf("complete.\n");
-	
+
 done:
-	ts_options_free(&opts);
-	ts_space_free(&s);
+	ts_free();
 	return (rc == -1 ? 1 : 0);
 }

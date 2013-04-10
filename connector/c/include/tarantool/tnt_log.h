@@ -92,6 +92,7 @@ struct tnt_log {
 	int (*read)(struct tnt_log *l, char **buf, uint32_t *size);
 	int (*process)(struct tnt_log *l, char *buf, uint32_t size,
 		       union tnt_log_value *value);
+	off_t current_offset;
 	struct tnt_log_row current;
 	union tnt_log_value current_value;
 	enum tnt_log_error error;
@@ -106,6 +107,8 @@ enum tnt_log_type tnt_log_guess(char *file);
 enum tnt_log_error
 tnt_log_open(struct tnt_log *l, char *file, enum tnt_log_type type);
 void tnt_log_close(struct tnt_log *l);
+
+int tnt_log_seek(struct tnt_log *l, off_t offset);
 
 struct tnt_log_row *tnt_log_next(struct tnt_log *l);
 struct tnt_log_row *tnt_log_next_to(struct tnt_log *l, union tnt_log_value *value);
