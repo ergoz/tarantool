@@ -131,7 +131,7 @@ box.remote.lib = {
 
 
 -- local tarantool
-box.remote.localhost = {
+box.localhost = {
     process = function(self, ...)
         return box.process(...)
     end,
@@ -168,9 +168,13 @@ box.remote.localhost = {
     timeout = function(self, timeout)
         return self
     end,
+
+    close = function(self)
+        error("box.localhost can't be closed")
+    end
 }
 
-setmetatable(box.remote.localhost, { __index = box.remote.lib })
+setmetatable(box.localhost, { __index = box.remote.lib })
 
 
 box.remote.new = function(host, port, timeout)
@@ -192,56 +196,87 @@ box.remote.new = function(host, port, timeout)
             end
         },
 
-
         read_fiber = function(self)
-            box.fiber.detach()
-            while true do
-                if self.s == nil then
-                    box.fiber.sleep(.1)
-                else
-                    -- TODO: error handling
-
-                    print("trying to read header")
-                    local res = { self.s:recv(12) }
-                    local op, blen, sync = box.unpack('iii', res[1])
-                    local header = res[1]
-                    
-                    print("op=", op, ", blen=", blen, ", sync=", sync)
-
-                    local body = ''
-                    if blen > 0 then
-                        res = { self.s:recv(blen) }
-                        body = res[1]
-                    end
-                    if self.processing[sync] ~= nil then
-                        local ch = self.processing[sync]
-                        print(string.format('resp length: %d', string.len(header .. body)))
-                        ch:put(header .. body, 0)
+            return function()
+                box.fiber.detach()
+                local res
+                while true do
+                    if self.s == nil then
+                        box.fiber.sleep(.01)
                     else
-                        print("Unexpected response ", sync)
+                        -- TODO: error handling
+
+                        res = { self.s:recv(12) }
+                        if res[3] ~= nil then break end
+                        local header = res[1]
+                        if string.len(header) ~= 12 then break end
+                        local op, blen, sync = box.unpack('iii', header)
+                        
+                        local body = ''
+                        if blen > 0 then
+                            res = { self.s:recv(blen) }
+                            if res[3] ~= nil then break end
+                            body = res[1]
+                            if string.len(body) ~= blen then break end
+
+
+                        end
+                        if self.processing[sync] ~= nil then
+                            local ch = self.processing[sync]
+                            ch:put(header .. body, 0)
+                        else
+                            print("Unexpected response ", sync)
+                        end
                     end
                 end
+                self:close()
             end
         end,
 
 
         connect_process = function(self, ...)
+            self.s = box.socket.tcp()
             if self.s == nil then
-                self.s = box.socket.tcp()
-            end
-            if self.s == nil then
-                return nil, "Can not create socket"
-            end
-            local res = { self.s:connect( unpack(self.connect) ) }
-            if res[1] == nil then
-                return nil, res[4]
+                self:close("Can not create socket")
             end
 
-            self.process = self.connected_process
-            self.o_read_fiber =
-                box.fiber.create( function() self.read_fiber(self) end )
-            box.fiber.resume(self.o_read_fiber)
+            local timeout = self.timeout_request
+            self.timeout_request = nil
+            
+            if self.cch ~= nil then
+                if self.connect[3] == nil then
+                    self.cch:get()
+                else
+                    self.cch:get(self.connect[3])
+                end
 
+                if self.o_read_fiber == nil then
+                    local e = { self.s:error() }
+                    error(e[2])
+                end
+
+            else
+                local res = { self.s:connect( unpack(self.connect) ) }
+                if self.cch ~= nil then
+                    while self.cch:has_readers() do
+                        self.cch:put(true, 0)
+                    end
+                end
+                self.cch = nil
+
+
+                if res[1] == nil then
+                    self:close("Can't connect to remote tarantool")
+                    error(res[4])
+                end
+                self.process = self.connected_process
+                self.o_read_fiber = box.fiber.create( self.read_fiber(self) )
+                box.fiber.resume(self.o_read_fiber)
+
+            end
+
+
+            self.timeout_request = timeout
             return self:connected_process(...)
         end,
 
@@ -255,15 +290,8 @@ box.remote.new = function(host, port, timeout)
 
             local res = { self.s:send(request) }
             if res[3] ~= nil then
-                print(res[3])
-                -- all socket errors are fatal
-                for sync, ch in pairs(self.processing) do
-                    if type(sync) == 'number' then
-                        ch:put(false, 0)
-                    end
-                end
-                self.process = connect_process
-                return nil, res[3]
+                self:close(res[3])
+                error(res[3])
             end
 
             self.timeout_request = timeout
@@ -281,14 +309,18 @@ box.remote.new = function(host, port, timeout)
             self.processing[sync] = nil
 
             if response == false then
+                self:close("Lost connection to remote tarantool")
+                self.ping = function()
+                    return false
+                end
                 if op == 65280 then
                     return false
                 end
-                error("Lost connection to remote tarantool")
+                self:process()  -- throw exception
             end
 
             if response == nil then
-                error("request timeout reached")
+                return nil
             end
 
             if op == 65280 then
@@ -302,6 +334,33 @@ box.remote.new = function(host, port, timeout)
 
             return box.unpack('R', body)
         end,
+        
+        close = function(self, message)
+            if message == nil then
+                message = "Connection isn't established"
+            end
+            self.process = function() error(message) end
+            self.close = function()
+                error("Remote connection is already closed")
+            end
+            self.ping = function()
+                return false
+            end
+
+            for sync, ch in pairs(self.processing) do
+                if type(sync) == 'number' then
+                    ch:put(false, 0)
+                end
+                self.processing[sync] = nil
+            end
+
+            if self.s ~= nil then
+                local s = self.s
+                self.s = nil
+                s:close()
+            end
+        end,
+
 
     }
     
@@ -332,14 +391,14 @@ end
 --
 --
 function box.call(proc_name, ...)
-    return box.remote.localhost:call(proc_name, ...)
+    return box.localhost:call(proc_name, ...)
 end
 
 --
 --
 --
 function box.select_limit(space, index, offset, limit, ...)
-    return box.remote.localhost:select_limit(space, index, offset, limit, ...)
+    return box.localhost:select_limit(space, index, offset, limit, ...)
 end
 
 
@@ -347,7 +406,7 @@ end
 --
 --
 function box.select(space, index, ...)
-    return box.remote.localhost:select(space, index, ...)
+    return box.localhost:select(space, index, ...)
 end
 
 --
@@ -356,7 +415,7 @@ end
 -- starts from the key.
 --
 function box.select_range(sno, ino, limit, ...)
-    return box.remote.localhost:select_range(sno, ino, limit, ...)
+    return box.localhost:select_range(sno, ino, limit, ...)
 end
 
 --
@@ -365,7 +424,7 @@ end
 -- starts from the key.
 --
 function box.select_reverse_range(sno, ino, limit, ...)
-    return box.remote.localhost:select_reverse_range(sno, ino, limit, ...)
+    return box.localhost:select_reverse_range(sno, ino, limit, ...)
 end
 
 --
@@ -373,22 +432,22 @@ end
 -- index is always 0. It doesn't accept compound keys
 --
 function box.delete(space, ...)
-    return box.remote.localhost:delete(space, ...)
+    return box.localhost:delete(space, ...)
 end
 
 -- insert or replace a tuple
 function box.replace(space, ...)
-    return box.remote.localhost:replace(space, ...)
+    return box.localhost:replace(space, ...)
 end
 
 -- insert a tuple (produces an error if the tuple already exists)
 function box.insert(space, ...)
-    return box.remote.localhost:insert(space, ...)
+    return box.localhost:insert(space, ...)
 end
 
 --
 function box.update(space, key, format, ...)
-    return box.remote.localhost:update(space, key, format, ...)
+    return box.localhost:update(space, key, format, ...)
 end
 
 
