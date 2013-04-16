@@ -23,6 +23,8 @@
 #include "ref.h"
 #include "ts.h"
 #include "indexate.h"
+#include "update.h"
+#include "cursor.h"
 
 extern struct ts tss;
 
@@ -47,7 +49,7 @@ search_hash(const struct ts_key *k, struct ts_space *s)
 
 inline int
 search_equal(const struct ts_key *a,
-	     const struct ts_key *b, struct ts_space *s)
+             const struct ts_key *b, struct ts_space *s)
 {
 	return memcmp(a->key, b->key, s->key_size) == 0;
 }
@@ -59,7 +61,7 @@ snapshot_process_row(struct ts_spaces *s, int fileid, int offset,
 {
 	struct ts_space *space =
 		ts_space_match(s, ss->log.current.row_snap.space);
-	struct ts_key *k = ts_space_keyalloc(space, &is->t, fileid, offset);
+	struct ts_key *k = ts_space_keyalloc(space, &is->t, fileid, offset, 0);
 	if (k == NULL) {
 		printf("failed to create key\n");
 		return -1;
@@ -173,9 +175,10 @@ xlog_process_row(struct ts_spaces *s, int fileid, int offset, struct tnt_request
 	case TNT_OP_DELETE:
 		ns = r->r.del.h.ns;
 		t = &r->r.del.t;
-		return 0;
+		break;
 	case TNT_OP_UPDATE:
-		assert(0);
+		ns = r->r.update.h.ns;
+		t = &r->r.update.t;
 		break;
 	default:
 		assert(0);
@@ -190,7 +193,7 @@ xlog_process_row(struct ts_spaces *s, int fileid, int offset, struct tnt_request
 	}
 
 	/* create key */
-	struct ts_key *k = ts_space_keyalloc(space, t, fileid, offset);
+	struct ts_key *k = ts_space_keyalloc(space, t, fileid, offset, 0);
 	if (k == NULL) {
 		printf("failed to create key\n");
 		return -1;
@@ -208,12 +211,74 @@ xlog_process_row(struct ts_spaces *s, int fileid, int offset, struct tnt_request
 			return -1;
 		}
 		break;
-	case TNT_OP_DELETE:
-		assert(mh_pk_get(space->index, &node, space) != mh_end(space->index));
-		mh_pk_remove(space->index, &node, space);
+	case TNT_OP_DELETE: {
+		pos = mh_pk_get(space->index, &node, space);
+		assert(pos != mh_end(space->index));
+		struct ts_key *key = *mh_pk_node(space->index, pos);
+		mh_pk_del(space->index, pos, space);
+		free(key);
 		free(k);
 		break;
-	case TNT_OP_UPDATE:
+	}
+	case TNT_OP_UPDATE: {
+		/* read old tuple, check index first - it may contain tuple from a
+		 * previous update */
+		pos = mh_pk_get(space->index, &node, space);
+		assert(pos != mh_end(space->index));
+		struct ts_key *key = *mh_pk_node(space->index, pos);
+		struct tnt_tuple *old = NULL;
+		struct ts_cursor cursor;
+		memset(&cursor, 0, sizeof(cursor));
+
+		if (key->flags & TS_KEY_WITH_TUPLE) {
+			uint32_t size = *(uint32_t*)key->key + space->key_size;
+
+			old = tnt_tuple_set(NULL, key->key + space->key_size + sizeof(uint32_t), size);
+			if (old == NULL) {
+				free(k);
+				return -1;
+			}
+		} else {
+			/* load from file */
+			if (ts_cursor_open(&cursor, key)) {
+				free(k);
+				return -1;
+			}
+			old = ts_cursor_tuple(&cursor);
+		}
+
+		/* remove key tuple from index, due to possibility of the key
+		 * being changed by update */
+		mh_pk_del(space->index, pos, space);
+		free(k);
+		free(key);
+
+		/* free old key */
+		struct tnt_tuple *n = ts_update(r, old);
+		if (n == NULL)
+			return -1;
+
+		/* free old tuple */
+		tnt_tuple_free(old);
+
+		/* close file */
+		ts_cursor_close(&cursor);
+
+		/* create new key with new tuple */
+		k = ts_space_keyalloc(space, n, fileid, offset, 1);
+		if (k == NULL) {
+			printf("failed to create key\n");
+			tnt_tuple_free(n);
+			return -1;
+		}
+		tnt_tuple_free(n);
+		pos = mh_pk_put(space->index, &node, NULL, space);
+		if (pos == mh_end(space->index)) {
+			free(k);
+			return -1;
+		}
+		break;
+	}
 	default:
 		break;
 	}

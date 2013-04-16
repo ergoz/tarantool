@@ -47,6 +47,6 @@ int ts_space_fill(struct ts_spaces *s, struct ts_options *opts);
 
 struct ts_key*
 ts_space_keyalloc(struct ts_space *s, struct tnt_tuple *t, int fileid,
-                  int offset);
+                  int offset, int attach);
 
 #endif

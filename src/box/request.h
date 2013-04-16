@@ -31,19 +31,15 @@
 #include <util.h>
 #include <stdbool.h>
 
-enum {
-	/** A limit on how many operations a single UPDATE can have. */
-	BOX_UPDATE_OP_CNT_MAX = 4000,
-};
 struct txn;
 struct port;
 
-#define BOX_RETURN_TUPLE		0x01
-#define BOX_ADD				0x02
-#define BOX_REPLACE			0x04
-#define BOX_ALLOWED_REQUEST_FLAGS	(BOX_RETURN_TUPLE | \
-					 BOX_ADD | \
-					 BOX_REPLACE)
+#define BOX_RETURN_TUPLE 0x01
+#define BOX_ADD          0x02
+#define BOX_REPLACE      0x04
+#define BOX_ALLOWED_REQUEST_FLAGS (BOX_RETURN_TUPLE | \
+                                   BOX_ADD | \
+                                   BOX_REPLACE)
 
 /**
     deprecated request ids:
@@ -65,31 +61,17 @@ struct port;
 
     DO NOT use these ids!
  */
-#define REQUESTS(_)				\
-        _(REPLACE, 13)				\
-	_(SELECT, 17)				\
-	_(UPDATE, 19)				\
-	_(DELETE_1_3, 20)			\
-	_(DELETE, 21)				\
-	_(CALL, 22)
+
+#define REQUESTS(_)       \
+        _(REPLACE, 13)    \
+        _(SELECT, 17)     \
+        _(UPDATE, 19)     \
+        _(DELETE_1_3, 20) \
+        _(DELETE, 21)     \
+        _(CALL, 22)
 
 ENUM(requests, REQUESTS);
 extern const char *requests_strs[];
-
-/** UPDATE operation codes. */
-#define UPDATE_OP_CODES(_)			\
-	_(UPDATE_OP_SET, 0)			\
-	_(UPDATE_OP_ADD, 1)			\
-	_(UPDATE_OP_AND, 2)			\
-	_(UPDATE_OP_XOR, 3)			\
-	_(UPDATE_OP_OR, 4)			\
-	_(UPDATE_OP_SPLICE, 5)			\
-	_(UPDATE_OP_DELETE, 6)			\
-	_(UPDATE_OP_INSERT, 7)			\
-	_(UPDATE_OP_SUBTRACT, 8)		\
-	_(UPDATE_OP_MAX, 10)			\
-
-ENUM(update_op_codes, UPDATE_OP_CODES);
 
 static inline bool
 request_is_select(u32 type)

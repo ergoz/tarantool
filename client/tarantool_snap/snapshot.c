@@ -30,42 +30,8 @@
 extern struct ts tss;
 
 static int
-ts_snapshot_xfer(FILE *snapshot, struct tnt_log *current,
-                 struct ts_ref *r,
-                 struct ts_key *k, uint32_t space, uint64_t lsn)
+ts_snapshot_write(FILE *snapshot, uint32_t space, uint64_t lsn, struct tnt_tuple *t)
 {
-	int rc = tnt_log_seek(current, k->offset);
-	if (rc == -1) {
-		printf("failed to seek for: %s:%d\n", r->file, k->offset);
-		return -1;
-	}
-	if (tnt_log_next(current) == NULL) {
-		printf("failed to read: %s:%d\n", r->file, k->offset);
-		return -1;
-	}
-
-	struct tnt_tuple *t = NULL;
-
-	if (r->is_snap) {
-		t = &current->current.value->t;
-	} else {
-		struct tnt_request *rp = &current->current_value.r;
-		switch (rp->h.type) {
-		case TNT_OP_INSERT:
-			t = &rp->r.insert.t;
-			break;
-		case TNT_OP_DELETE:
-			t = &rp->r.del.t;
-			return 0;
-		case TNT_OP_UPDATE:
-			assert(0);
-			break;
-		default:
-			assert(0);
-			break;
-		}
-	}
-
 	/* write snapshot row */
 	if (fwrite(&tnt_log_marker_v11, sizeof(tnt_log_marker_v11), 1, snapshot) != 1) {
 		printf("failed to write row\n");
@@ -109,6 +75,50 @@ ts_snapshot_xfer(FILE *snapshot, struct tnt_log *current,
 		return -1;
 	}
 
+	return 0;
+}
+
+static int
+ts_snapshot_xfer(FILE *snapshot, struct tnt_log *current,
+                 struct ts_ref *r,
+                 struct ts_key *k, uint32_t space, uint64_t lsn)
+{
+	int rc = tnt_log_seek(current, k->offset);
+	if (rc == -1) {
+		printf("failed to seek for: %s:%d\n", r->file, k->offset);
+		return -1;
+	}
+	if (tnt_log_next(current) == NULL) {
+		printf("failed to read: %s:%d\n", r->file, k->offset);
+		return -1;
+	}
+
+	struct tnt_tuple *t = NULL;
+
+	if (r->is_snap) {
+		t = &current->current.value->t;
+	} else {
+		struct tnt_request *rp = &current->current_value.r;
+		switch (rp->h.type) {
+		case TNT_OP_INSERT:
+			t = &rp->r.insert.t;
+			break;
+		case TNT_OP_DELETE:
+			t = &rp->r.del.t;
+			return 0;
+		case TNT_OP_UPDATE:
+			assert(0);
+			break;
+		default:
+			assert(0);
+			break;
+		}
+	}
+
+	/* write snapshot row */
+	if (ts_snapshot_write(snapshot, space, lsn, t) != 1)
+		return -1;
+
 	if (r->is_snap) {
 		tnt_tuple_free(t);
 	} else {
@@ -119,8 +129,10 @@ ts_snapshot_xfer(FILE *snapshot, struct tnt_log *current,
 
 int ts_snapshot_create(void)
 {
-	/* TODO: sort index by file:offset to reduce io overhead  */
-
+	/* TODO:
+	 *
+	 * index can be sorted by file:offset to reduce io overhead, but
+	 * will have unsorted index on disk. */
 
 	unsigned long long snap_lsn = tss.last_xlog_lsn;
 
@@ -167,6 +179,25 @@ int ts_snapshot_create(void)
 				}
 				count++;
 
+				/* first, check if key hash a data */
+				if (k->flags & TS_KEY_WITH_TUPLE) {
+					uint32_t size = *(uint32_t*)k->key + space->key_size;
+
+					struct tnt_tuple *t =
+						tnt_tuple_set(NULL, k->key + space->key_size + sizeof(uint32_t), size);
+					if (t == NULL) {
+						printf("failed to allocate tuple\n");
+						goto error;
+					}
+
+					rc = ts_snapshot_write(snapshot, space->id, snap_lsn, t);
+					if (rc == -1)
+						goto error;
+					pos++;
+					continue;
+				}
+
+				/* otherwise, load from snapshot or xlog */
 				if (current_file != r->file) {
 					tnt_log_close(&current);
 					rc = tnt_log_open(&current, r->file,
