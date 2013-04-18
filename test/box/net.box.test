@@ -8,7 +8,7 @@
 
 
 
-exec admin "lua remote = box.remote.new('127.0.0.1', box.cfg.primary_port, '0.5')"
+exec admin "lua remote = box.net.box.new('localhost', box.cfg.primary_port, '0.5')"
 exec admin "lua type(remote)"
 exec admin "lua remote:ping()"
 exec admin "lua remote:ping()"

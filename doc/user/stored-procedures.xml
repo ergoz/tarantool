@@ -2153,17 +2153,17 @@ end
 </variablelist>
 </section>
 
-<section xml:id="sp-box-remote">
-    <title>Package <code>box.remote</code> &mdash; remote box connector</title>
-<variablelist xml:id="box.remote">
+<section xml:id="sp-box-net-box">
+    <title>Package <code>box.net.box</code> &mdash; remote box connector</title>
+<variablelist xml:id="box.net.box">
     <simpara>
-        box.remote allows to connect and make requests with remote
+        box.net.box allows to connect and make requests with remote
         box.
     </simpara>
 
     <varlistentry>
         <term>
-            <emphasis role="lua">box.remote.new(host, port [,
+            <emphasis role="lua">remote = box.net.box.new(host, port [,
             connect_timeout])
             </emphasis>
         </term>
@@ -2173,9 +2173,10 @@ end
                 established before the first request.
             </para>
             <para>
-                There is one predefined connection: <code>box.localhost</code>.
+                There is one predefined connection:
+                <code>box.net.box.emb</code>.
                 All <code>box.*</code> methods recall
-                <code>box.localhost</code>'s methods.
+                <code>box.net.box.emb</code>'s methods.
             </para>
             
         </listitem>
@@ -2275,14 +2276,14 @@ end
         <term><emphasis>Examples</emphasis></term>
 <programlisting>
 box.select(1,2,3)
-box.localhost:select(1,2,3) -- the same
+box.net.box.emb:select(1,2,3) -- the same
 
 box.insert(1,2,3)
-box.localhost:insert(1,2,3) -- the same
+box.net.box.emb:insert(1,2,3) -- the same
 
 
 
-local remote_self = box.remote.new('127.0.0.1', box.info.primary_port)
+local remote_self = box.net.box.new('127.0.0.1', box.info.primary_port)
 remote_self:ping()
 remote_self:insert(1,3,4)
 

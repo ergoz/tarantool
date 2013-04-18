@@ -1,8 +1,8 @@
 box.flags = { BOX_RETURN_TUPLE = 0x01, BOX_ADD = 0x02, BOX_REPLACE = 0x04 }
 
 
-box.remote = {}
-box.remote.lib = {
+box.net = { box = {} }
+box.net.box.lib = {
     delete = function(self, space, ...)
         local key_part_count = select('#', ...)
         return self:process(21,
@@ -126,12 +126,11 @@ box.remote.lib = {
 
         return wrapper
     end,
-
 }
 
 
 -- local tarantool
-box.localhost = {
+box.net.box.emb = {
     process = function(self, ...)
         return box.process(...)
     end,
@@ -170,14 +169,13 @@ box.localhost = {
     end,
 
     close = function(self)
-        error("box.localhost can't be closed")
+        error("box.net.box.emb can't be closed")
     end
 }
 
-setmetatable(box.localhost, { __index = box.remote.lib })
+setmetatable(box.net.box.emb, { __index = box.net.box.lib })
 
-
-box.remote.new = function(host, port, timeout)
+box.net.box.new = function(host, port, timeout)
 
     local remote = {
         processing = {
@@ -373,7 +371,7 @@ box.remote.new = function(host, port, timeout)
 
     setmetatable(
         remote, {
-            __index = box.remote.lib,
+            __index = box.net.box.lib,
             __gc = function(self)
                 if self.s ~= nil then
                     self.s:close()
@@ -391,14 +389,14 @@ end
 --
 --
 function box.call(proc_name, ...)
-    return box.localhost:call(proc_name, ...)
+    return box.net.box.emb:call(proc_name, ...)
 end
 
 --
 --
 --
 function box.select_limit(space, index, offset, limit, ...)
-    return box.localhost:select_limit(space, index, offset, limit, ...)
+    return box.net.box.emb:select_limit(space, index, offset, limit, ...)
 end
 
 
@@ -406,7 +404,7 @@ end
 --
 --
 function box.select(space, index, ...)
-    return box.localhost:select(space, index, ...)
+    return box.net.box.emb:select(space, index, ...)
 end
 
 --
@@ -415,7 +413,7 @@ end
 -- starts from the key.
 --
 function box.select_range(sno, ino, limit, ...)
-    return box.localhost:select_range(sno, ino, limit, ...)
+    return box.net.box.emb:select_range(sno, ino, limit, ...)
 end
 
 --
@@ -424,7 +422,7 @@ end
 -- starts from the key.
 --
 function box.select_reverse_range(sno, ino, limit, ...)
-    return box.localhost:select_reverse_range(sno, ino, limit, ...)
+    return box.net.box.emb:select_reverse_range(sno, ino, limit, ...)
 end
 
 --
@@ -432,22 +430,22 @@ end
 -- index is always 0. It doesn't accept compound keys
 --
 function box.delete(space, ...)
-    return box.localhost:delete(space, ...)
+    return box.net.box.emb:delete(space, ...)
 end
 
 -- insert or replace a tuple
 function box.replace(space, ...)
-    return box.localhost:replace(space, ...)
+    return box.net.box.emb:replace(space, ...)
 end
 
 -- insert a tuple (produces an error if the tuple already exists)
 function box.insert(space, ...)
-    return box.localhost:insert(space, ...)
+    return box.net.box.emb:insert(space, ...)
 end
 
 --
 function box.update(space, key, format, ...)
-    return box.localhost:update(space, key, format, ...)
+    return box.net.box.emb:update(space, key, format, ...)
 end
 
 
